@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生存模拟 · 季节/气候/水循环 可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0d1017;color:#e8ecf4;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+       min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:18px;}
+  h1{font-size:18px;font-weight:600;margin-bottom:4px;}
+  .sub{font-size:12px;color:#8a96ab;margin-bottom:14px;text-align:center;line-height:1.6;}
+  .wrap{width:min(720px,100%);}
+  .scene-box{position:relative;border-radius:14px;overflow:hidden;border:1px solid #232b3a;}
+  #scene{display:block;width:100%;height:300px;}
+  .hud{position:absolute;top:12px;left:14px;text-shadow:0 1px 4px rgba(0,0,0,.6);}
+  .hud .day{font-size:13px;color:#cfd6e4;}
+  .hud .time{font-size:34px;font-weight:800;line-height:1;}
+  .hud .ev{font-size:13px;margin-top:4px;display:inline-block;background:rgba(0,0,0,.35);padding:2px 9px;border-radius:999px;}
+  .hud .se{font-size:13px;margin-top:5px;display:inline-block;background:rgba(0,0,0,.35);padding:2px 9px;border-radius:999px;}
+  .lightpill{position:absolute;top:14px;right:14px;text-align:right;text-shadow:0 1px 4px rgba(0,0,0,.6);}
+  .lightpill .v{font-size:24px;font-weight:800;}
+  .lightpill .l{font-size:11px;color:#cfd6e4;}
+  .bar{width:120px;height:8px;background:rgba(0,0,0,.4);border-radius:6px;margin-top:5px;overflow:hidden;margin-left:auto;}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,#3a4a6a,#ffd66a);border-radius:6px;}
+  .panel{background:#141a25;border:1px solid #232b3a;border-radius:12px;padding:12px 14px;margin-top:12px;}
+  .ctrls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  button{background:#222c3d;color:#e8ecf4;border:1px solid #2f3a4d;border-radius:9px;padding:8px 12px;
+         font-size:13px;cursor:pointer;font-weight:600;}
+  button:hover{border-color:#4c8dff;}
+  button.on{background:#3a6fd6;border-color:#4c8dff;}
+  .info{margin-left:auto;font-size:12px;color:#8a96ab;}
+  canvas.g{display:block;width:100%;height:130px;margin-top:6px;}
+  .glabel{font-size:11px;color:#8a96ab;margin-top:4px;}
+  .tanks{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;}
+  .tank{flex:1;min-width:110px;background:#0f141d;border:1px solid #232b3a;border-radius:9px;padding:8px 10px;}
+  .tank .n{font-size:11px;color:#8a96ab;}
+  .tank .v{font-size:18px;font-weight:800;margin-top:2px;}
+  .tbar{height:6px;border-radius:4px;background:rgba(255,255,255,.08);margin-top:6px;overflow:hidden;}
+  .tbar i{display:block;height:100%;border-radius:4px;}
+  select{background:#222c3d;color:#e8ecf4;border:1px solid #2f3a4d;border-radius:9px;padding:7px 9px;font-size:13px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🌍 季节 / 气候 / 水循环 可视化</h1>
+  <div class="sub">开局对齐现实<b>日期+时刻</b>，之后 <b>1 现实秒 = 1 游戏分钟</b>。<br>
+    赤纬→日长&amp;强度随季节变 → 双层热惯性(季节滞后) → 水循环(夏多雨) · <b>月相照夜</b>(满月晴夜可见) · <b>低温降雪→开春融雪汛</b>。</div>
+
+  <div class="scene-box">
+    <canvas id="scene"></canvas>
+    <div class="hud">
+      <div class="day" id="hDay">—</div>
+      <div class="time" id="hTime">00:00</div>
+      <div class="ev" id="hEv">夜晚</div>
+      <div class="se" id="hSeason">—</div>
+    </div>
+    <div class="lightpill">
+      <div class="v" id="hLight">0</div>
+      <div class="l">光照 light</div>
+      <div class="bar"><i id="hBar" style="width:0%"></i></div>
+      <div class="l" id="hTemp" style="margin-top:5px">气温 --°C</div>
+      <div class="l" id="hGT" style="margin-top:5px">地温 --°C</div>
+      <div class="l" id="hHumid" style="margin-top:5px">湿度 --%</div>
+      <div class="l" id="hCloud" style="margin-top:5px">云量 --%</div>
+      <div class="l" id="hDayLen" style="margin-top:5px">日长 --h</div>
+      <div class="l" id="hMoon" style="margin-top:5px">🌑 月相</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="ctrls">
+      <button id="bPause" class="on">⏸ 暂停</button>
+      <button class="spd-btn on" data-s="1">1×</button>
+      <button class="spd-btn" data-s="60">60×</button>
+      <button class="spd-btn" data-s="600">600×</button>
+      <button class="spd-btn" data-s="3600">3600×季</button>
+      <button id="bReset">↺ 重置到现在</button>
+      <span style="font-size:13px;color:#9aa6ab">生物群系</span>
+      <select id="biome">
+        <option value="5">赤道 5°</option>
+        <option value="40" selected>温带 40°</option>
+        <option value="62">高纬 62°</option>
+      </select>
+      <span class="info" id="info">1× = 现实1秒 → 游戏1分钟</span>
+    </div>
+    <div class="tanks">
+      <div class="tank"><div class="n">🟫 大地水量</div><div class="v" id="tG">--</div><div class="tbar"><i id="bG" style="background:#b07a3c"></i></div></div>
+      <div class="tank"><div class="n">🟦 低空水汽</div><div class="v" id="tV">--</div><div class="tbar"><i id="bV" style="background:#5cc8ff"></i></div></div>
+      <div class="tank"><div class="n">⬜ 云层</div><div class="v" id="tC">--</div><div class="tbar"><i id="bC" style="background:#cdd4e0"></i></div></div>
+      <div class="tank"><div class="n">❄️ 积雪</div><div class="v" id="tS">--</div><div class="tbar"><i id="bS" style="background:#e1eaf8"></i></div></div>
+      <div class="tank"><div class="n">🌧 降水</div><div class="v" id="tR">晴</div><div class="tbar"><i id="bR" style="background:#4c8dff;width:0%"></i></div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <canvas id="yearGraph" class="g"></canvas>
+    <div class="glabel">全年总览：🟧 气温日内带(低~高) · 🟫 地温(峰值滞后夏至) · ❄️ 底部白=积雪(冬积·春融) · 背景=春夏秋冬 · ×3600 看季节推移</div>
+  </div>
+  <div class="panel">
+    <canvas id="graph" class="g"></canvas>
+    <div class="glabel">最近若干天：🟫 大地水量 · 🟦 低空水汽 · ⬜ 云层 · 蓝带=降雨（旱→积云→暴雨→回灌的短周期节奏）</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const clamp=(v,a,b)=> v<a?a:v>b?b:v, PI=Math.PI;
+
+/* ===== 年/季：赤纬驱动（与 C# YearCycle 同构）===== */
+let YEAR=365, LAT=40, TILT=23.44, EQDAY=80;
+const decl=d=> TILT*PI/180*Math.sin(2*PI*(d-EQDAY)/YEAR);
+function sunFactor(m,d){ const phi=LAT*PI/180, de=decl(d), H=2*PI*(m/1440)-PI;
+  const e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H); return e>0?e:0; }
+function halfDay(d){ const phi=LAT*PI/180; let x=-Math.tan(phi)*Math.tan(decl(d)); x=clamp(x,-1,1); return Math.acos(x)/PI*720; } // 正午到日落的分钟
+const sunriseOf=d=>720-halfDay(d), sunsetOf=d=>720+halfDay(d), dayLenOf=d=>2*halfDay(d)/60;
+function seasonName(d){ const q=Math.floor(((d-EQDAY)%YEAR+YEAR)%YEAR*4/YEAR); return ['🌱 春','☀️ 夏','🍂 秋','❄️ 冬'][q]; }
+
+/* ===== 月光（与 C# SunCycle.MoonFactor 同构）：月相亮度 × 月亮高度，时角比太阳滞后相位 ===== */
+const SYN=29.53, MoonPeak=4;
+const moonPhase=()=> ((total/1440/SYN)%1+1)%1;            // 月相相位 0..1（0新月 0.5满月）
+function moonFactor(m,d){ const f=moonPhase();
+  const illum=(1-Math.cos(2*PI*f))/2, phi=LAT*PI/180, de=decl(d+f*YEAR), H=2*PI*(m/1440)-PI-2*PI*f;
+  const e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H); return illum*(e>0?e:0); }
+const moonName=()=>['🌑 新月','🌒 娥眉','🌓 上弦','🌔 盈凸','🌕 满月','🌖 亏凸','🌗 下弦','🌘 残月'][Math.round(moonPhase()*8)%8];
+
+/* ===== 光照 / 双层气温 / 湿度（随动态 云量C、水汽V）===== */
+const LightPeak=100;
+const cloudSunF =C=> 1-0.8*C/100;
+const cloudCoolF=C=> 1-0.6*C/100;
+const lightF=(m,d,C)=> (LightPeak*sunFactor(m,d)+MoonPeak*moonFactor(m,d))*cloudSunF(C);   // 日照 + 月光
+const TempMin=-40, TempMax=55;
+const AG=0.10, AL=0.007, SG=0.0065, SL=0.00007, GBASE=-16;     // 与 C# Climate 同构
+function satCap(T){ const es=6.112*Math.exp(17.62*T/(243.12+T)); return 216.7*es/(273.15+T); }
+const rhF=(V,T)=> clamp(V/satCap(T)*100,0,100);
+
+/* ===== 水循环 + 雪（与 C# WaterCycle 同构）===== */
+const EvapK=0.035, VaporMax=45, CondK=0.0045, DispK=0.001, RainK=0.015, RainHi=42, RainLo=12;
+const SnowTemp=1.0, MeltTemp=0.0, MeltK=0.006, SnowCap=300;
+
+/* ===== 时间：对齐现实 日期+时刻 ===== */
+let paused=false, speed=1, acc=0;
+const REAL_PER_MIN=1.0;
+function realDOY(){ const n=new Date(); const s=new Date(n.getFullYear(),0,0); return Math.floor((n-s)/86400000)-1; }
+function realMinuteOfDay(){ const d=new Date(); return d.getHours()*60+d.getMinutes()+d.getSeconds()/60; }
+let total = ((realDOY()%YEAR+YEAR)%YEAR)*1440 + Math.round(realMinuteOfDay());
+const curMin =()=> ((total%1440)+1440)%1440;
+const curDOY =()=> ((Math.floor(total/1440)%YEAR)+YEAR)%YEAR;
+
+/* ===== 状态 ===== */
+let airTemp=8, groundTemp=8, vapor=8, cloud=20, groundWater=70, snow=0, raining=0;
+const WINDOW=6*1440;
+let history=[];                  // 短期：水库
+let yearArr=new Array(YEAR);     // 全年：每日 {tmin,tmax,tg,snow}
+
+function stepModel(m,d){
+  const sunC=sunFactor(m,d)*cloudSunF(cloud);
+  groundTemp=clamp(groundTemp+SG*sunC-SL*(groundTemp-GBASE),TempMin,TempMax);
+  airTemp   =clamp(airTemp+AG*sunC-AL*cloudCoolF(cloud)*(airTemp-groundTemp),TempMin,TempMax);
+  // 水循环 + 雪（守恒：地面+水汽+云+积雪）
+  const sun=sunFactor(m,d);
+  const E=Math.min(EvapK*sun*Math.max(0,1-vapor/VaporMax), groundWater);
+  const F=CondK*vapor*(0.3+0.7*sun), Dd=DispK*cloud;
+  let st=raining>0.5; if(!st&&cloud>RainHi) st=true;
+  const R=st?RainK*cloud:0; if(st&&(cloud-R)<RainLo) st=false;
+  const toSnow=(R>0&&airTemp<=SnowTemp)?R:0, rainIn=R-toSnow;          // 冷→雪 暖→雨
+  const melt=Math.min(snow, MeltK*Math.max(0,airTemp-MeltTemp));        // 度日融雪
+  groundWater=clamp(groundWater+rainIn+melt-E,0,100);
+  snow=clamp(snow+toSnow-melt,0,SnowCap);
+  vapor=clamp(vapor+E-F+Dd,0,50);
+  cloud=clamp(cloud+F-Dd-R,0,100);
+  raining=st?1:0;
+}
+// 冷启动空转2年到吸引子，并记录最近1年总览 + 最近WINDOW分钟短期史；末态对齐 total。
+function spinUp(){
+  airTemp=8;groundTemp=8;vapor=8;cloud=20;groundWater=70;snow=0;raining=0;
+  history=[]; yearArr=new Array(YEAR);
+  const start=total-2*YEAR*1440;
+  for(let mm=start; mm<=total; mm++){
+    const m=((mm%1440)+1440)%1440, d=((Math.floor(mm/1440)%YEAR)+YEAR)%YEAR;
+    stepModel(m,d);
+    if(mm>=total-YEAR*1440){
+      let y=yearArr[d];
+      if(!y || m===0){ y={tmin:airTemp,tmax:airTemp,tg:groundTemp,snow:snow}; yearArr[d]=y; }
+      else { if(airTemp<y.tmin)y.tmin=airTemp; if(airTemp>y.tmax)y.tmax=airTemp; y.tg=groundTemp; y.snow=snow; }
+    }
+    if(mm>=total-WINDOW) history.push({g:groundWater,v:vapor,c:cloud,r:raining});
+  }
+}
+function resetToReal(){ total=((realDOY()%YEAR+YEAR)%YEAR)*1440+Math.round(realMinuteOfDay()); acc=0; spinUp(); }
+spinUp();
+
+function advanceOneMinute(){
+  total++; const m=curMin(), d=curDOY();
+  stepModel(m,d);
+  history.push({g:groundWater,v:vapor,c:cloud,r:raining});
+  if(history.length>WINDOW+720) history.splice(0,history.length-WINDOW);
+  let y=yearArr[d];
+  if(!y||m===0){ y={tmin:airTemp,tmax:airTemp,tg:groundTemp,snow:snow}; yearArr[d]=y; }
+  else { if(airTemp<y.tmin)y.tmin=airTemp; if(airTemp>y.tmax)y.tmax=airTemp; y.tg=groundTemp; y.snow=snow; }
+}
+function step(dt){ if(paused) return; acc+=dt*speed; while(acc>=REAL_PER_MIN){ acc-=REAL_PER_MIN; advanceOneMinute(); } }
+
+/* ===== 渲染 ===== */
+const sc=document.getElementById('scene'), sx=sc.getContext('2d');
+const yg=document.getElementById('yearGraph'), yx=yg.getContext('2d');
+const gr=document.getElementById('graph'), gx=gr.getContext('2d');
+function fit(c){ const r=c.getBoundingClientRect(), dp=Math.min(devicePixelRatio||1,2);
+  c.width=r.width*dp; c.height=r.height*dp; c.getContext('2d').setTransform(dp,0,0,dp,0,0); return {w:r.width,h:r.height}; }
+let S=fit(sc), Y=fit(yg), Gd=fit(gr);
+addEventListener('resize',()=>{S=fit(sc);Y=fit(yg);Gd=fit(gr);});
+const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t));
+const rgb=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
+
+let frame=0;
+function drawScene(m,d,light){
+  const W=S.w,H=S.h, L=light/100, horizon=H*0.72, cf=cloud/100;
+  const sr=sunriseOf(d), ss=sunsetOf(d), sun=sunFactor(m,d);
+  const nightTop=[10,14,34], dayTop=[78,150,222], nightBot=[20,26,52], dayBot=[150,196,236];
+  let top=mix(nightTop,dayTop,L), bot=mix(nightBot,dayBot,L);
+  const warm = sun>0 ? clamp((0.32-sun)/0.32,0,1) : 0;
+  bot=mix(bot,[245,150,70],warm*0.7);
+  const g=sx.createLinearGradient(0,0,0,horizon); g.addColorStop(0,rgb(top)); g.addColorStop(1,rgb(bot));
+  sx.fillStyle=g; sx.fillRect(0,0,W,H);
+  if(cf>0){ sx.fillStyle='rgba(170,176,190,'+(cf*0.55)+')'; sx.fillRect(0,0,W,horizon); }
+  const starA=clamp((25-light)/25,0,1)*(1-cf);
+  if(starA>0){ for(let i=0;i<70;i++){ const x=(i*97)%W, y=(i*53)%(horizon-20), tw=0.5+0.5*Math.sin(i+frame*0.05);
+    sx.fillStyle=`rgba(255,255,255,${starA*tw*0.9})`; sx.fillRect(x,y,2,2);} }
+  const dayFrac=(m-sr)/(ss-sr);
+  if(dayFrac>=0&&dayFrac<=1){ const x=dayFrac*W, y=horizon-Math.sin(dayFrac*PI)*(horizon-30);
+    sx.globalAlpha=1-0.75*cf; sx.shadowColor='#ffcf5a'; sx.shadowBlur=30; sx.fillStyle='#ffd76a'; sx.beginPath(); sx.arc(x,y,20,0,7); sx.fill(); sx.shadowBlur=0; sx.globalAlpha=1; }
+  else { const mf=moonFactor(m,d), illum=(1-Math.cos(2*PI*moonPhase()))/2;     // 月亮在地平线上且有相位才画
+    if(mf>0.004){ const nl=(1440-(ss-sr)); const nm=(m>=ss)? m-ss : m+(1440-ss); const nf=nl>0?nm/nl:0;
+      const x=nf*W, y=horizon-Math.sin(nf*PI)*(horizon-50);
+      sx.globalAlpha=(0.25+0.75*illum)*(1-0.7*cf); sx.shadowColor='#9fb8ff'; sx.shadowBlur=18;
+      sx.fillStyle='#eef2fb'; sx.beginPath(); sx.arc(x,y,14,0,7); sx.fill(); sx.shadowBlur=0;
+      sx.fillStyle=rgb(mix(top,nightTop,0.3)); sx.beginPath(); sx.arc(x+6,y-4,13,0,7); sx.fill(); sx.globalAlpha=1; } }
+  if(raining){
+    if(airTemp<=SnowTemp){ sx.fillStyle='rgba(255,255,255,.9)';                 // 降雪：飘落雪点
+      for(let i=0;i<80;i++){ const x=(i*83+frame*2+8*Math.sin(i+frame*0.04))%W, y=((i*139+frame*6)%(horizon|0)); sx.beginPath(); sx.arc(x,y,1.7,0,7); sx.fill(); } }
+    else { sx.strokeStyle='rgba(150,190,255,.55)'; sx.lineWidth=1.4;            // 降雨：斜雨丝
+      for(let i=0;i<90;i++){ const x=(i*71+frame*9)%W, y=((i*153+frame*22)%(horizon|0)); sx.beginPath(); sx.moveTo(x,y); sx.lineTo(x-3,y+11); sx.stroke(); } }
+  }
+  // 地面：湿润度→绿/枯黄；积雪量→盖白
+  const wet=groundWater/100, snowCover=clamp(snow/35,0,1);
+  let gnd=mix([78,64,38],[40,80,46],wet);
+  gnd=mix(gnd,[8,12,18],1-clamp(L*0.7+0.2,0,1));
+  gnd=mix(gnd,[230,236,244],snowCover*0.9);
+  sx.fillStyle=rgb(gnd); sx.beginPath(); sx.moveTo(0,horizon);
+  for(let x=0;x<=W;x+=40) sx.lineTo(x,horizon-8-12*Math.sin(x*0.03));
+  sx.lineTo(W,H); sx.lineTo(0,H); sx.fill();
+}
+function drawYear(d){
+  const W=Y.w,H=Y.h,pad=6; yx.clearRect(0,0,W,H);
+  const tY=v=> H-pad-(clamp(v,-15,35)+15)/50*(H-2*pad);
+  // 季节背景
+  const cols=['rgba(90,200,120,.07)','rgba(255,210,90,.08)','rgba(220,150,80,.07)','rgba(120,170,255,.07)'];
+  for(let i=0;i<YEAR;i++){ const q=Math.floor(((i-EQDAY)%YEAR+YEAR)%YEAR*4/YEAR); yx.fillStyle=cols[q]; yx.fillRect(W*i/YEAR,0,W/YEAR+0.6,H); }
+  // 0°C 线
+  yx.strokeStyle='rgba(255,255,255,.12)'; yx.lineWidth=1; yx.beginPath(); yx.moveTo(0,tY(0)); yx.lineTo(W,tY(0)); yx.stroke();
+  // 积雪（底部白色面积）
+  yx.fillStyle='rgba(225,234,248,.45)'; yx.beginPath(); yx.moveTo(0,H);
+  for(let i=0;i<YEAR;i++){ const y=yearArr[i]; if(!y)continue; yx.lineTo(W*i/YEAR, H-clamp((y.snow||0)/120,0,1)*(H-2*pad)); }
+  yx.lineTo(W,H); yx.closePath(); yx.fill();
+  // 气温日内带（low~high）
+  yx.fillStyle='rgba(255,138,76,.30)'; yx.beginPath();
+  let started=false;
+  for(let i=0;i<YEAR;i++){ const y=yearArr[i]; if(!y)continue; const x=W*i/YEAR; if(!started){yx.moveTo(x,tY(y.tmax));started=true;} else yx.lineTo(x,tY(y.tmax)); }
+  for(let i=YEAR-1;i>=0;i--){ const y=yearArr[i]; if(!y)continue; yx.lineTo(W*i/YEAR,tY(y.tmin)); }
+  yx.closePath(); yx.fill();
+  // 地温线
+  yx.strokeStyle='#b07a3c'; yx.lineWidth=2; yx.beginPath(); started=false;
+  for(let i=0;i<YEAR;i++){ const y=yearArr[i]; if(!y)continue; const x=W*i/YEAR; started?yx.lineTo(x,tY(y.tg)):(yx.moveTo(x,tY(y.tg)),started=true); }
+  yx.stroke();
+  // 当前竖线
+  const cx=W*d/YEAR; yx.strokeStyle='rgba(255,255,255,.6)'; yx.setLineDash([3,3]); yx.beginPath(); yx.moveTo(cx,0); yx.lineTo(cx,H); yx.stroke(); yx.setLineDash([]);
+  yx.fillStyle='#7d8aa0'; yx.font='10px sans-serif';
+  ['春','夏','秋','冬'].forEach((s,q)=>{ const x=W*(((EQDAY+q*YEAR/4)%YEAR)/YEAR); yx.fillText(s,clamp(x+4,0,W-14),12); });
+  yx.fillText('35°',2,12); yx.fillText('-15°',2,H-2);
+}
+function drawGraph(){
+  const W=Gd.w,H=Gd.h,pad=6; gx.clearRect(0,0,W,H);
+  const n=history.length; if(n<2) return;
+  const x=i=>W*i/(n-1), y=v=>H-pad-(v/100)*(H-2*pad);
+  gx.fillStyle='rgba(76,141,255,.16)';
+  for(let i=0;i<n;i++) if(history[i].r) gx.fillRect(x(i),0,Math.max(1,W/n)+0.6,H);
+  const line=(k,c,s)=>{ gx.strokeStyle=c; gx.lineWidth=2; gx.beginPath();
+    for(let i=0;i<n;i++){ const v=history[i][k]*(s||1); i===0?gx.moveTo(x(i),y(v)):gx.lineTo(x(i),y(v)); } gx.stroke(); };
+  line('c','#cdd4e0',1); line('v','#5cc8ff',2); line('g','#b07a3c',1);
+  gx.strokeStyle='rgba(255,255,255,.5)'; gx.setLineDash([3,3]); gx.beginPath(); gx.moveTo(W-1,0); gx.lineTo(W-1,H); gx.stroke(); gx.setLineDash([]);
+}
+const pad2=n=>String(Math.floor(n)).padStart(2,'0');
+const setBar=(id,p)=>document.getElementById(id).style.width=clamp(p,0,100)+'%';
+function updateHUD(m,d,light){
+  document.getElementById('hDay').textContent='第'+(Math.floor(total/1440)+1)+'天';
+  document.getElementById('hTime').textContent=pad2(m/60)+':'+pad2(m%60);
+  document.getElementById('hEv').textContent= raining?(airTemp<=SnowTemp?'❄️ 降雪中':'🌧 降雨中'):(sunFactor(m,d)>0?'☀️ 白天':'🌙 夜晚');
+  document.getElementById('hSeason').textContent=seasonName(d)+' · 第'+(d+1)+'/'+YEAR+'天';
+  document.getElementById('hLight').textContent=light.toFixed(0); setBar('hBar',light);
+  document.getElementById('hTemp').textContent='气温 '+airTemp.toFixed(1)+'°C';
+  document.getElementById('hGT').textContent='地温 '+groundTemp.toFixed(1)+'°C';
+  document.getElementById('hHumid').textContent='湿度 '+rhF(vapor,airTemp).toFixed(0)+'%';
+  document.getElementById('hCloud').textContent='云量 '+cloud.toFixed(0)+'%';
+  document.getElementById('hDayLen').textContent='日长 '+dayLenOf(d).toFixed(1)+'h';
+  document.getElementById('hMoon').textContent=moonName();
+  document.getElementById('tG').textContent=groundWater.toFixed(1); setBar('bG',groundWater);
+  document.getElementById('tV').textContent=vapor.toFixed(1);       setBar('bV',vapor*2);
+  document.getElementById('tC').textContent=cloud.toFixed(1);       setBar('bC',cloud);
+  document.getElementById('tS').textContent=snow.toFixed(0);        setBar('bS',snow/120*100);
+  document.getElementById('tR').textContent=raining?(airTemp<=SnowTemp?'❄️ 雪':'🌧 雨'):'晴';  setBar('bR',raining?100:0);
+}
+
+let last=performance.now();
+function loop(now){ const dt=Math.min((now-last)/1000,0.1); last=now; frame++;
+  step(dt);
+  const m=curMin(), d=curDOY(), light=lightF(m,d,cloud);
+  drawScene(m,d,light); drawYear(d); drawGraph(); updateHUD(m,d,light);
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+/* ===== 控件 ===== */
+const bPause=document.getElementById('bPause'), info=document.getElementById('info');
+bPause.onclick=function(){ paused=!paused; this.textContent=paused?'▶ 继续':'⏸ 暂停'; this.classList.toggle('on',!paused); };
+document.getElementById('bReset').onclick=resetToReal;
+document.querySelectorAll('.spd-btn').forEach(b=>b.onclick=()=>{
+  speed=+b.dataset.s; document.querySelectorAll('.spd-btn').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  info.textContent = speed===1 ? '1× = 现实1秒 → 游戏1分钟' : (speed+'× · 一游戏年 ≈ '+(YEAR*1440/speed/60).toFixed(0)+' 分钟');
+});
+document.getElementById('biome').onchange=e=>{ LAT=+e.target.value; resetToReal(); };
+</script>
+</body>
+</html>

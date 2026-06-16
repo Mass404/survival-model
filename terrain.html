@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生存模拟 · 地形/地点图 可视化</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0d1017;color:#e8ecf4;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+       min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:18px;}
+  h1{font-size:18px;font-weight:600;margin-bottom:4px;}
+  .sub{font-size:12px;color:#8a96ab;margin-bottom:14px;text-align:center;line-height:1.6;}
+  .wrap{width:min(820px,100%);}
+  .scene-box{position:relative;border-radius:14px;overflow:hidden;border:1px solid #232b3a;}
+  #scene{display:block;width:100%;height:380px;}
+  .hud{position:absolute;top:12px;left:14px;text-shadow:0 1px 4px rgba(0,0,0,.6);pointer-events:none;}
+  .hud .time{font-size:30px;font-weight:800;line-height:1;}
+  .hud .day{font-size:12px;color:#cfd6e4;}
+  .hud .se{font-size:12px;margin-top:3px;}
+  .panel{background:#141a25;border:1px solid #232b3a;border-radius:12px;padding:12px 14px;margin-top:12px;}
+  .ctrls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  button{background:#222c3d;color:#e8ecf4;border:1px solid #2f3a4d;border-radius:9px;padding:8px 12px;font-size:13px;cursor:pointer;font-weight:600;}
+  button:hover{border-color:#4c8dff;} button.on{background:#3a6fd6;border-color:#4c8dff;}
+  select{background:#222c3d;color:#e8ecf4;border:1px solid #2f3a4d;border-radius:9px;padding:7px 9px;font-size:13px;}
+  .info{margin-left:auto;font-size:12px;color:#8a96ab;}
+  canvas.g{display:block;width:100%;height:130px;margin-top:6px;}
+  .glabel{font-size:11px;color:#8a96ab;margin-top:4px;}
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:12px;}
+  th,td{padding:4px 6px;text-align:right;border-bottom:1px solid #1d2533;}
+  th:first-child,td:first-child{text-align:left;}
+  th{color:#8a96ab;font-weight:600;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏔 地形 / 地点图 可视化</h1>
+  <div class="sub">一条 山顶→山坡→峡谷→盆地 的山谷 + 旁挂峡谷的洞穴。全局天空共享，各地点本地气候。<br>
+    <b>冬封雪于峰 → 春阳融雪 → 顺坡汇流 → 五月盆地涨成季节湖 → 夏蒸秋退</b> · 洞穴常年恒温 · 总水守恒。</div>
+
+  <div class="scene-box">
+    <canvas id="scene"></canvas>
+    <div class="hud">
+      <div class="day" id="hDay">—</div>
+      <div class="time" id="hTime">00:00</div>
+      <div class="se" id="hSeason">—</div>
+      <div class="se" id="hMoon">🌑</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="ctrls">
+      <button id="bPause" class="on">⏸ 暂停</button>
+      <button class="spd-btn on" data-s="60">60×</button>
+      <button class="spd-btn" data-s="600">600×</button>
+      <button class="spd-btn" data-s="3600">3600×季</button>
+      <button id="bReset">↺ 重置</button>
+      <span style="font-size:13px;color:#9aa6ab">纬度</span>
+      <select id="biome"><option value="5">赤道 5°</option><option value="40" selected>温带 40°</option><option value="62">高纬 62°</option></select>
+      <span class="info" id="info">60× · 一年 ≈ 146 分钟</span>
+    </div>
+    <table id="tbl">
+      <thead><tr><th>地点</th><th>海拔</th><th>气温</th><th>积雪</th><th>土壤</th><th>湖</th><th>天气</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="glabel">守恒核算：全图总水 <b id="tw">—</b>（应恒定）</div>
+  </div>
+
+  <div class="panel">
+    <canvas id="yearGraph" class="g"></canvas>
+    <div class="glabel">全年：🟦 盆地湖（春汛涨、夏秋退） · ⬜ 山顶积雪（冬积、春融） · 背景=春夏秋冬 · 竖线=当前（×3600 看一整轮）</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const clamp=(v,a,b)=>v<a?a:v>b?b:v, PI=Math.PI, lerp=(a,b,t)=>a+(b-a)*t;
+
+/* ===== 全局天空（与 C# YearCycle/SunCycle 同构）===== */
+let YEAR=365, LAT=40, TILT=23.44, EQDAY=80, SYN=29.53;
+const decl=d=> TILT*PI/180*Math.sin(2*PI*(d-EQDAY)/YEAR);
+function sunF(m,d){ const phi=LAT*PI/180,de=decl(d),H=2*PI*(m/1440)-PI;
+  const e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H); return e>0?e:0; }
+function halfDay(d){ const phi=LAT*PI/180; let x=-Math.tan(phi)*Math.tan(decl(d)); x=clamp(x,-1,1); return Math.acos(x)/PI*720; }
+const sunriseOf=d=>720-halfDay(d), sunsetOf=d=>720+halfDay(d);
+function seasonName(d){ return ['🌱 春','☀️ 夏','🍂 秋','❄️ 冬'][Math.floor(((d-EQDAY)%YEAR+YEAR)%YEAR*4/YEAR)]; }
+const moonPhase=()=>((total/1440/SYN)%1+1)%1;
+function moonF(m,d){ const f=moonPhase(),illum=(1-Math.cos(2*PI*f))/2,phi=LAT*PI/180,de=decl(d+f*YEAR),H=2*PI*(m/1440)-PI-2*PI*f;
+  const e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H); return illum*(e>0?e:0); }
+const moonName=()=>['🌑新月','🌒','🌓上弦','🌔','🌕满月','🌖','🌗下弦','🌘'][Math.round(moonPhase()*8)%8];
+
+/* ===== 模型常量（与 C# 同构）===== */
+const LightPeak=100, MoonPeak=4;
+const AG=0.10,AL=0.007,SG=0.0065,SL=0.00007,GFLOOR=-16,LAPSE=6.5/1000;
+const EvapK=0.035,VaporMax=45,CondK=0.0045,DispK=0.001,RainK=0.015,RainHi=42,RainLo=12;
+const SnowTemp=1.0,MeltTemp=0.0,MeltK=0.006,VDIFF=0.02;
+const csun=C=>1-0.8*C/100, ccool=C=>1-0.6*C/100;
+
+/* ===== 地点（topo 上游→下游；与 SampleValley 同构）===== */
+function mkRegions(){
+  const R=[
+    {name:'山顶',elev:1400,sky:1.05,soilCap:25,oro:1.15,lakeEvap:0,  down:1, xr:0.13},
+    {name:'山坡',elev:900, sky:1.0, soilCap:35,oro:1.05,lakeEvap:0,  down:2, xr:0.34},
+    {name:'峡谷',elev:500, sky:0.5, soilCap:30,oro:1.0, lakeEvap:0,  down:3, xr:0.55},
+    {name:'盆地',elev:150, sky:1.0, soilCap:15,oro:0.85,lakeEvap:0.45,down:-1,xr:0.85},
+    {name:'洞穴',cave:true,parent:2, xr:0.50}
+  ];
+  for(const r of R){
+    if(r.cave){ r.Tair=8; r.Tg=8; r.flow=0; continue; }
+    r.gbase=GFLOOR-LAPSE*r.elev; const init=8-LAPSE*r.elev;
+    r.Tair=init; r.Tg=init; r.Soil=Math.min(r.soilCap,70); r.V=8; r.C=20; r.Snow=0; r.Lake=0; r.storm=0; r.inflow=0; r.runoff=0; r.flow=0;
+  }
+  // 种子水预算（总水≈289 才养出盆地湖）
+  R[3].Lake=40; for(const i of [0,1,2,3]) R[i].V=16;
+  return R;
+}
+let regs=mkRegions();
+const edges=[[0,1],[1,2],[2,3]];
+const totalWater=()=> regs.reduce((s,r)=> s + (r.cave?0:(r.Soil+r.Snow+r.V+r.C+r.Lake+r.inflow)),0);
+
+/* ===== 时间 ===== */
+let paused=false, speed=60, acc=0;
+function realDOY(){ const n=new Date(),s=new Date(n.getFullYear(),0,0); return Math.floor((n-s)/86400000)-1; }
+function realMin(){ const d=new Date(); return d.getHours()*60+d.getMinutes()+d.getSeconds()/60; }
+let total=((realDOY()%YEAR+YEAR)%YEAR)*1440+Math.round(realMin());
+const curMin=()=>((total%1440)+1440)%1440, curDOY=()=>((Math.floor(total/1440)%YEAR)+YEAR)%YEAR;
+
+function stepMinute(){
+  total++; const m=curMin(), d=curDOY(), slo=sunF(m,d);
+  for(const r of regs){            // ① 逐地点本地结算
+    if(r.cave) continue;
+    const sl=slo*r.sky;
+    r.Tg += SG*slo*csun(r.C) - SL*(r.Tg-r.gbase);
+    r.Tair += AG*sl*csun(r.C) - AL*ccool(r.C)*(r.Tair-r.Tg);
+    const dry=Math.max(0,1-r.V/VaporMax);
+    const Es=Math.min(EvapK*sl*dry,r.Soil), El=Math.min(EvapK*sl*dry*r.lakeEvap,r.Lake);
+    const F=CondK*r.oro*r.V*(0.3+0.7*sl), D=DispK*r.C;
+    let st=r.storm>0.5; if(!st&&r.C>RainHi)st=true;
+    const Rr=st?RainK*r.C:0; if(st&&(r.C-Rr)<RainLo)st=false;
+    const toSnow=(Rr>0&&r.Tair<=SnowTemp)?Rr:0, rainIn=Rr-toSnow;
+    const melt=Math.min(r.Snow,MeltK*Math.max(0,r.Tair-MeltTemp));
+    r.Snow=clamp(r.Snow+toSnow-melt,0,300);
+    r.V=clamp(r.V+Es+El-F+D,0,50); r.C=clamp(r.C+F-D-Rr,0,100);
+    r.Lake=Math.max(0,r.Lake-El); r.storm=st?1:0; r.snowing=toSnow>0;
+    const inW=rainIn+melt+r.inflow, soilAE=r.Soil-Es, space=Math.max(0,r.soilCap-soilAE), infil=Math.min(space,inW);
+    r.Soil=soilAE+infil; r.runoff=inW-infil; r.inflow=0;
+  }
+  const cave=regs[4], par=regs[cave.parent];   // 洞穴恒温：跟随峡谷地温慢层
+  cave.Tg=par.Tg; cave.Tair+=0.02*(par.Tg-cave.Tair);
+  for(const r of regs){             // ② 径流路由（1 分钟/跳）
+    if(r.cave||r.runoff<=0)continue;
+    r.flowRaw=r.runoff;
+    if(r.down>=0) regs[r.down].inflow+=r.runoff; else r.Lake+=r.runoff;
+    r.runoff=0;
+  }
+  for(const [a,b] of edges){        // ③ 水汽扩散
+    const f=VDIFF*(regs[a].V-regs[b].V); regs[a].V-=f; regs[b].V+=f;
+  }
+}
+function step(dt){ if(paused)return; acc+=dt*speed; while(acc>=1){ acc--; stepMinute(); } }
+
+/* ===== 年度史（spin-up 填充：盆地湖 + 山顶雪）===== */
+const WINDOWY=YEAR; let yearArr=new Array(YEAR);
+function spinUp(){
+  regs=mkRegions(); yearArr=new Array(YEAR);
+  const target=total, N=2*YEAR*1440;
+  total=target-N;                       // 退到两年前
+  for(let i=0;i<N;i++){
+    stepMinute();                       // 内部 total++，跑满 N 步后 total 回到 target
+    if(i>=N-YEAR*1440){                 // 末一年填年度总览
+      const d=curDOY(), m=curMin();
+      let y=yearArr[d];
+      if(!y||m===0){ y={lake:regs[3].Lake, snow:regs[0].Snow}; yearArr[d]=y; }
+      else { y.lake=regs[3].Lake; y.snow=regs[0].Snow; }
+    }
+  }
+}
+function resetAll(){ total=((realDOY()%YEAR+YEAR)%YEAR)*1440+Math.round(realMin()); acc=0; spinUp(); }
+spinUp();
+
+/* ===== 渲染 ===== */
+const sc=document.getElementById('scene'), sx=sc.getContext('2d');
+const yg=document.getElementById('yearGraph'), yx=yg.getContext('2d');
+function fit(c){ const r=c.getBoundingClientRect(),dp=Math.min(devicePixelRatio||1,2);
+  c.width=r.width*dp; c.height=r.height*dp; c.getContext('2d').setTransform(dp,0,0,dp,0,0); return {w:r.width,h:r.height}; }
+let S=fit(sc), Y=fit(yg);
+addEventListener('resize',()=>{S=fit(sc);Y=fit(yg);});
+const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t)), rgb=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
+
+// 地形剖面 (xfrac, elev)
+const PROF=[[0,1520],[0.13,1400],[0.30,980],[0.42,720],[0.55,500],[0.66,300],[0.74,180],[1,150]];
+function yE(W,H,elev){ return H*0.88 - (elev/1520)*(H*0.64); }
+function surfElev(xf){ for(let i=1;i<PROF.length;i++){ if(xf<=PROF[i][0]){ const a=PROF[i-1],b=PROF[i],t=(xf-a[0])/(b[0]-a[0]); return lerp(a[1],b[1],t);} } return 150; }
+
+let frame=0;
+function drawScene(){
+  const W=S.w,H=S.h,m=curMin(),d=curDOY();
+  const sun=sunF(m,d), moon=moonF(m,d), skyL=clamp(LightPeak*sun+MoonPeak*moon,0,100), L=skyL/100;
+  // 天空
+  const nt=[10,14,34],dt=[78,150,222],nb=[26,30,56],db=[150,196,236];
+  const g=sx.createLinearGradient(0,0,0,H*0.7); g.addColorStop(0,rgb(mix(nt,dt,L))); g.addColorStop(1,rgb(mix(nb,db,L)));
+  sx.fillStyle=g; sx.fillRect(0,0,W,H);
+  const starA=clamp((22-skyL)/22,0,1);
+  if(starA>0)for(let i=0;i<80;i++){ const x=(i*97)%W,y=(i*53)%(H*0.5),tw=0.5+0.5*Math.sin(i+frame*0.05); sx.fillStyle=`rgba(255,255,255,${starA*tw*0.9})`; sx.fillRect(x,y,2,2);}
+  // 太阳/月亮 弧
+  const sr=sunriseOf(d),ss=sunsetOf(d),df=(m-sr)/(ss-sr);
+  if(df>=0&&df<=1){ const x=df*W,y=H*0.66-Math.sin(df*PI)*(H*0.56); sx.shadowColor='#ffcf5a';sx.shadowBlur=28;sx.fillStyle='#ffd76a';sx.beginPath();sx.arc(x,y,16,0,7);sx.fill();sx.shadowBlur=0; }
+  else if(moon>0.01){ const illum=(1-Math.cos(2*PI*moonPhase()))/2,nl=1440-(ss-sr),nm=(m>=ss)?m-ss:m+(1440-ss),nf=nl>0?nm/nl:0;
+    const x=nf*W,y=H*0.66-Math.sin(nf*PI)*(H*0.5); sx.globalAlpha=0.3+0.7*illum;sx.shadowColor='#9fb8ff';sx.shadowBlur=14;sx.fillStyle='#eef2fb';sx.beginPath();sx.arc(x,y,11,0,7);sx.fill();sx.shadowBlur=0;sx.globalAlpha=1; }
+  // 地形剖面填充
+  sx.beginPath(); sx.moveTo(0,yE(W,H,PROF[0][1]));
+  for(let xf=0;xf<=1.0001;xf+=0.02) sx.lineTo(xf*W,yE(W,H,surfElev(xf)));
+  sx.lineTo(W,H); sx.lineTo(0,H); sx.closePath();
+  const gg=sx.createLinearGradient(0,H*0.25,0,H); gg.addColorStop(0,rgb(mix([60,66,78],[120,140,150],L*0.5))); gg.addColorStop(1,rgb(mix([26,30,40],[60,74,60],L*0.4)));
+  sx.fillStyle=gg; sx.fill();
+  // 各地点：积雪盖白 / 土壤绿、云与降水 / 标签
+  for(const r of regs){
+    if(r.cave) continue;
+    const x=r.xr*W, se=surfElev(r.xr), y=yE(W,H,se);
+    // 雪盖（沿地表一段铺白）
+    if(r.Snow>1){ const a=clamp(r.Snow/60,0,1); sx.fillStyle=`rgba(238,243,250,${0.85*a})`;
+      sx.beginPath(); const w=W*0.10; sx.moveTo(x-w,yE(W,H,surfElev(r.xr-0.07))+2);
+      for(let xf=r.xr-0.07;xf<=r.xr+0.07;xf+=0.01) sx.lineTo(xf*W, yE(W,H,surfElev(xf))+1);
+      sx.lineTo(x+w, yE(W,H,surfElev(r.xr+0.07))+10); sx.lineTo(x-w, y+10); sx.closePath(); sx.fill(); }
+    else { const wet=clamp(r.Soil/r.soilCap,0,1); sx.fillStyle=`rgba(${lerp(120,70,wet)|0},${lerp(110,150,wet)|0},${lerp(70,70,wet)|0},0.5)`;
+      sx.beginPath(); sx.ellipse(x,y+6,W*0.075,9,0,0,7); sx.fill(); }
+    // 云 + 降水（本地）
+    const cf=r.C/100, cy=y-58-se*0.0;
+    if(cf>0.12){ sx.fillStyle=`rgba(200,206,218,${0.25+0.5*cf})`; sx.beginPath(); sx.ellipse(x,cy,26+18*cf,11+5*cf,0,0,7); sx.fill(); }
+    if(r.storm){ const cold=r.Tair<=SnowTemp;
+      for(let i=0;i<14;i++){ const px=x-24+((i*37+frame*(cold?2:7))%48), py=cy+8+((i*53+frame*(cold?4:14))%(y-cy-6));
+        if(cold){ sx.fillStyle='rgba(255,255,255,.9)'; sx.beginPath(); sx.arc(px,py,1.6,0,7); sx.fill(); }
+        else { sx.strokeStyle='rgba(150,190,255,.6)'; sx.lineWidth=1.2; sx.beginPath(); sx.moveTo(px,py); sx.lineTo(px-2,py+7); sx.stroke(); } } }
+    // 标签
+    sx.fillStyle='rgba(0,0,0,.42)'; const lw=70,lh=30, lx=clamp(x-lw/2,2,W-lw-2), ly=y-46;
+    sx.fillRect(lx,ly,lw,lh);
+    sx.fillStyle='#e8ecf4'; sx.font='bold 11px sans-serif'; sx.textAlign='center';
+    sx.fillText(r.name+' '+r.Tair.toFixed(0)+'°', x, ly+12);
+    sx.font='10px sans-serif'; sx.fillStyle='#bcc6d6';
+    sx.fillText(r.Snow>1?('❄'+r.Snow.toFixed(0)):(r.Lake>0.5?('💧'+r.Lake.toFixed(0)):('土'+r.Soil.toFixed(0))), x, ly+24);
+    sx.textAlign='left';
+  }
+  // 盆地湖（水位随 Lake 升降）
+  const bx=regs[3].xr, floorY=yE(W,H,150), lakeLvl=clamp(regs[3].Lake/55,0,1);
+  if(regs[3].Lake>0.5){ const lx0=0.70*W, lx1=0.99*W, top=floorY+8-lakeLvl*42;
+    const lg=sx.createLinearGradient(0,top,0,floorY+12); lg.addColorStop(0,'rgba(90,160,230,.85)'); lg.addColorStop(1,'rgba(40,90,160,.9)');
+    sx.fillStyle=lg; sx.beginPath(); sx.moveTo(lx0,floorY+12); sx.lineTo(lx0,top); sx.lineTo(lx1,top); sx.lineTo(lx1,floorY+12); sx.closePath(); sx.fill();
+    sx.strokeStyle='rgba(180,220,255,.5)'; sx.lineWidth=1; sx.beginPath(); sx.moveTo(lx0,top); sx.lineTo(lx1,top); sx.stroke(); }
+  // 河流（融雪汛：上游有径流时沿坡画流动虚线）
+  for(let i=0;i<3;i++){ const r=regs[i]; r.flow=lerp(r.flow, r.flowRaw||0, 0.1); r.flowRaw=0;
+    if(r.flow>0.02){ const a=regs[i],b=regs[i+1]; sx.strokeStyle=`rgba(120,180,255,${clamp(r.flow*1.5,0.15,0.8)})`; sx.lineWidth=2+clamp(r.flow*3,0,4);
+      sx.setLineDash([6,6]); sx.lineDashOffset=-frame*3; sx.beginPath();
+      for(let xf=a.xr;xf<=b.xr;xf+=0.01) sx.lineTo(xf*W, yE(W,H,surfElev(xf))+3);
+      sx.stroke(); sx.setLineDash([]); } }
+  // 洞穴（峡谷壁上的暗拱，标恒温）
+  const cv=regs[4], cx=cv.xr*W, cy=yE(W,H,surfElev(cv.xr))+30;
+  sx.fillStyle='#0b0f16'; sx.beginPath(); sx.ellipse(cx,cy,20,15,0,0,7); sx.fill();
+  sx.strokeStyle='#3a4760'; sx.lineWidth=1.5; sx.beginPath(); sx.ellipse(cx,cy,20,15,0,PI,2*PI); sx.stroke();
+  sx.fillStyle='#9fb0c8'; sx.font='bold 10px sans-serif'; sx.textAlign='center'; sx.fillText('🕳'+cv.Tair.toFixed(0)+'°', cx, cy+4); sx.textAlign='left';
+}
+function drawYear(d){
+  const W=Y.w,H=Y.h,pad=6; yx.clearRect(0,0,W,H);
+  const cols=['rgba(90,200,120,.07)','rgba(255,210,90,.08)','rgba(220,150,80,.07)','rgba(120,170,255,.07)'];
+  for(let i=0;i<YEAR;i++){ const q=Math.floor(((i-EQDAY)%YEAR+YEAR)%YEAR*4/YEAR); yx.fillStyle=cols[q]; yx.fillRect(W*i/YEAR,0,W/YEAR+0.6,H); }
+  const y=v=>H-pad-(v/120)*(H-2*pad);
+  // 盆地湖（蓝面积）
+  yx.fillStyle='rgba(76,150,235,.35)'; yx.beginPath(); yx.moveTo(0,H); let on=false;
+  for(let i=0;i<YEAR;i++){ const a=yearArr[i]; if(!a)continue; yx.lineTo(W*i/YEAR,y(a.lake)); on=true; }
+  if(on){ yx.lineTo(W,H); yx.closePath(); yx.fill(); }
+  // 山顶雪（白线）
+  yx.strokeStyle='#dfe6f0'; yx.lineWidth=2; yx.beginPath(); let st=false;
+  for(let i=0;i<YEAR;i++){ const a=yearArr[i]; if(!a)continue; const x=W*i/YEAR; st?yx.lineTo(x,y(a.snow)):(yx.moveTo(x,y(a.snow)),st=true); }
+  yx.stroke();
+  const cx=W*d/YEAR; yx.strokeStyle='rgba(255,255,255,.6)'; yx.setLineDash([3,3]); yx.beginPath(); yx.moveTo(cx,0); yx.lineTo(cx,H); yx.stroke(); yx.setLineDash([]);
+  yx.fillStyle='#7d8aa0'; yx.font='10px sans-serif'; ['春','夏','秋','冬'].forEach((s,q)=>{ const x=W*(((EQDAY+q*YEAR/4)%YEAR)/YEAR); yx.fillText(s,clamp(x+4,0,W-14),12); });
+}
+const pad2=n=>String(Math.floor(n)).padStart(2,'0');
+function updateHUD(){
+  const m=curMin(),d=curDOY();
+  document.getElementById('hDay').textContent='第'+(Math.floor(total/1440)+1)+'天';
+  document.getElementById('hTime').textContent=pad2(m/60)+':'+pad2(m%60);
+  document.getElementById('hSeason').textContent=seasonName(d)+' · 第'+(d+1)+'/'+YEAR+'天';
+  document.getElementById('hMoon').textContent=moonName();
+  let html='';
+  for(const r of regs){ if(r.cave){ html+=`<tr><td>🕳 ${r.name}</td><td>—</td><td>${r.Tair.toFixed(1)}°</td><td>—</td><td>—</td><td>—</td><td>恒温避难</td></tr>`; continue; }
+    const wx = r.storm?(r.Tair<=SnowTemp?'❄️ 雪':'🌧 雨'):(r.C>40?'☁️ 阴':'☀️ 晴');
+    html+=`<tr><td>${r.name}</td><td>${r.elev}m</td><td>${r.Tair.toFixed(1)}°</td><td>${r.Snow.toFixed(0)}</td><td>${r.Soil.toFixed(0)}</td><td>${r.Lake.toFixed(0)}</td><td>${wx}</td></tr>`; }
+  document.getElementById('tbody').innerHTML=html;
+  document.getElementById('tw').textContent=totalWater().toFixed(1);
+}
+let last=performance.now();
+function loop(now){ const dt=Math.min((now-last)/1000,0.1); last=now; frame++;
+  step(dt); drawScene(); drawYear(curDOY()); updateHUD(); requestAnimationFrame(loop); }
+requestAnimationFrame(loop);
+
+/* ===== 控件 ===== */
+const info=document.getElementById('info');
+document.getElementById('bPause').onclick=function(){ paused=!paused; this.textContent=paused?'▶ 继续':'⏸ 暂停'; this.classList.toggle('on',!paused); };
+document.getElementById('bReset').onclick=resetAll;
+document.querySelectorAll('.spd-btn').forEach(b=>b.onclick=()=>{ speed=+b.dataset.s; document.querySelectorAll('.spd-btn').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  info.textContent=speed+'× · 一年 ≈ '+(YEAR*1440/speed/60).toFixed(0)+' 分钟'; });
+document.getElementById('biome').onchange=e=>{ LAT=+e.target.value; resetAll(); };
+</script>
+</body>
+</html>

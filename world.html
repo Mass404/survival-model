@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生存模拟 · 世界 / 地点切换</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#0d1017;color:#e8ecf4;font-family:"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+       min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px;}
+  h1{font-size:18px;font-weight:600;margin-bottom:4px;}
+  .sub{font-size:12px;color:#8a96ab;margin-bottom:12px;text-align:center;}
+  .wrap{width:min(860px,100%);}
+  .scene-box{position:relative;border-radius:14px;overflow:hidden;border:1px solid #232b3a;}
+  #scene{display:block;width:100%;height:400px;}
+  .hud{position:absolute;top:12px;left:14px;text-shadow:0 1px 5px rgba(0,0,0,.7);pointer-events:none;}
+  .hud .loc{font-size:26px;font-weight:800;line-height:1;}
+  .hud .time{font-size:14px;margin-top:3px;}
+  .hud .wx{font-size:13px;margin-top:4px;display:inline-block;background:rgba(0,0,0,.4);padding:2px 9px;border-radius:999px;}
+  .travel{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:rgba(8,11,17,.55);font-size:18px;font-weight:700;}
+  .cols{display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;}
+  .panel{background:#141a25;border:1px solid #232b3a;border-radius:12px;padding:12px 14px;flex:1;min-width:260px;}
+  .panel h3{font-size:13px;color:#9aa6ab;margin-bottom:8px;font-weight:600;}
+  #mini{display:block;width:100%;height:230px;cursor:pointer;}
+  .ctrls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;}
+  button{background:#222c3d;color:#e8ecf4;border:1px solid #2f3a4d;border-radius:9px;padding:7px 11px;font-size:13px;cursor:pointer;font-weight:600;}
+  button:hover{border-color:#4c8dff;} button.on{background:#3a6fd6;border-color:#4c8dff;}
+  select{background:#222c3d;color:#e8ecf4;border:1px solid #2f3a4d;border-radius:9px;padding:6px 9px;font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  td,th{padding:3px 5px;text-align:right;border-bottom:1px solid #1d2533;} td:first-child,th:first-child{text-align:left;}
+  th{color:#8a96ab;font-weight:600;} tr.here td{color:#ffd66a;}
+  .go{font-size:12px;color:#8a96ab;margin-top:6px;}
+  .go b{color:#cfe0ff;cursor:pointer;text-decoration:underline;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🗺 世界 / 地点切换</h1>
+  <div class="sub">起点 <b>海边</b>。点小地图上相邻地点即可<b>赶路</b>（耗游戏时间，途中天气照常推进）。全世界始终在后台模拟。</div>
+
+  <div class="scene-box">
+    <canvas id="scene"></canvas>
+    <div class="hud">
+      <div class="loc" id="hLoc">海边</div>
+      <div class="time" id="hTime">第1天 00:00 · 🌱春</div>
+      <div class="wx" id="hWx">☀️ 晴 · 12°C</div>
+    </div>
+    <div class="travel" id="travel">🚶 赶路中…</div>
+  </div>
+
+  <div class="cols">
+    <div class="panel" style="flex:1.1">
+      <h3>🧭 地图（点相邻地点出发）</h3>
+      <canvas id="mini"></canvas>
+      <div class="go" id="go"></div>
+    </div>
+    <div class="panel">
+      <h3>🌍 各地实况</h3>
+      <table><thead><tr><th>地点</th><th>气温</th><th>天气</th><th>水/水质</th></tr></thead><tbody id="tbody"></tbody></table>
+      <div class="ctrls">
+        <button id="bPause">⏸</button>
+        <button class="spd on" data-s="60">60×</button>
+        <button class="spd" data-s="600">600×</button>
+        <button class="spd" data-s="3600">3600×</button>
+        <span style="font-size:12px;color:#9aa6ab">纬度</span>
+        <select id="biome"><option value="5">赤道5°</option><option value="40" selected>温带40°</option><option value="62">高纬62°</option></select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const clamp=(v,a,b)=>v<a?a:v>b?b:v, PI=Math.PI, lerp=(a,b,t)=>a+(b-a)*t;
+/* ===== 全局天空 ===== */
+let YEAR=365,LAT=40,TILT=23.44,EQDAY=80,SYN=29.53;
+const decl=d=>TILT*PI/180*Math.sin(2*PI*(d-EQDAY)/YEAR);
+function sunF(m,d){const phi=LAT*PI/180,de=decl(d),H=2*PI*(m/1440)-PI;const e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H);return e>0?e:0;}
+function halfDay(d){const phi=LAT*PI/180;let x=-Math.tan(phi)*Math.tan(decl(d));x=clamp(x,-1,1);return Math.acos(x)/PI*720;}
+const sunriseOf=d=>720-halfDay(d),sunsetOf=d=>720+halfDay(d);
+const seasonName=d=>['🌱春','☀️夏','🍂秋','❄️冬'][Math.floor(((d-EQDAY)%YEAR+YEAR)%YEAR*4/YEAR)];
+const moonPhase=()=>((total/1440/SYN)%1+1)%1;
+function moonF(m,d){const f=moonPhase(),il=(1-Math.cos(2*PI*f))/2,phi=LAT*PI/180,de=decl(d+f*YEAR),H=2*PI*(m/1440)-PI-2*PI*f;const e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H);return il*(e>0?e:0);}
+/* ===== 模型常量（与 C#/hub3 同构）===== */
+const LightPeak=100,MoonPeak=4,AG=0.10,AL=0.007,SG=0.0065,SL=0.00007,GF=-16,LAPSE=6.5/1000;
+const EvapK=0.035,VaporMax=45,CondK=0.0045,DispK=0.001,RainK=0.015,RainHi=42,RainLo=12;
+const SnowTemp=1.0,MeltTemp=0.0,MeltK=0.006,VDIFF=0.015,SnowCap=600;
+const csun=C=>1-0.8*C/100,ccool=C=>1-0.6*C/100;
+const seaTemp=d=>13+6*Math.sin(2*PI*(d-110)/YEAR);
+/* ===== 矿物（Na Ca Mg K Fe，与 C# WaterChemistry 同构）===== */
+const MN=['钠','钙','镁','钾','铁','氯','硫酸盐','碳酸盐','硅','铜','碘','锌'], NE=12, WK=0.0006;
+const SOL=[8.0,0.4,2.0,3.0,0.05,9.0,1.2,0.6,0.08,0.03,12.0,0.2];
+const LITHO={  // Na Ca Mg K Fe | Cl SO4 HCO3 SiO2 Cu | I Zn
+  花岗岩:[0.4,[0.02,0.05,0.02,0.15,0.02,0.01,0.02,0.05,0.40,0.005,0.0,0.02]],
+  石灰岩:[1.0,[0.03,0.80,0.15,0.02,0.01,0.02,0.10,0.90,0.05,0.005,0.0,0.02]],
+  玄武岩:[0.8,[0.05,0.30,0.40,0.05,0.35,0.02,0.08,0.15,0.20,0.30,0.0,0.15]],
+  砂岩:  [0.5,[0.05,0.05,0.03,0.03,0.03,0.03,0.03,0.04,0.50,0.01,0.0,0.02]],
+  蒸发岩:[1.5,[1.50,0.50,0.20,0.10,0.00,1.40,0.80,0.10,0.02,0.0,0.0,0.05]],
+  黏土:  [0.7,[0.10,0.20,0.20,0.15,0.10,0.08,0.10,0.20,0.15,0.05,0.0,0.20]]};
+const conc=(r,e)=>{const w=(r.Soil||0)+(r.Lake||0);return w>0.01?r.dis[e]/w:0;};
+const salinity=r=>conc(r,0)+conc(r,5), tds=r=>{let s=0;for(let e=0;e<NE;e++)s+=conc(r,e);return s;};  // 盐=Na+Cl
+const drinkable=r=>!r.salty&&!r.cave&&salinity(r)<0.3&&tds(r)<0.8;
+const hasCrust=r=>r.dep&&r.dep.some(v=>v>0.3);
+const domMineral=r=>{let bi=1,bv=0;for(let e=1;e<NE;e++){if(e===5)continue;if(conc(r,e)>bv){bv=conc(r,e);bi=e;}}return bv>0.02?MN[bi]:'';};
+/* ===== 地点（枢纽放射）===== */
+function mkLocs(){
+  const L=[
+   {key:'coast',name:'海边',scene:'sea',  elev:0,  sky:1.0, soilCap:30,oro:0.8, lakeEvap:0.32,sea:true,salty:true,lith:'砂岩',  down:'',     mx:0.50,my:0.58},
+   {key:'wetland',name:'湿地',scene:'marsh',elev:50,sky:1.0, soilCap:20,oro:0.9, lakeEvap:0.5, lith:'黏土',  down:'coast',  mx:0.72,my:0.80},
+   {key:'forest',name:'森林',scene:'forest',elev:300,sky:0.85,soilCap:60,oro:1.0,lakeEvap:0,  lith:'黏土',  down:'coast',  mx:0.30,my:0.40},
+   {key:'foothill',name:'山脚',scene:'hills',elev:600,sky:1.0,soilCap:35,oro:1.0,lakeEvap:0,  lith:'玄武岩',down:'forest', mx:0.74,my:0.34},
+   {key:'mountain',name:'山顶',scene:'peak', elev:1050,sky:1.05,soilCap:25,oro:1.15,lakeEvap:0,lith:'花岗岩',down:'foothill',mx:0.90,my:0.13},
+   {key:'canyon',name:'峡谷',scene:'canyon',elev:500,sky:0.5, soilCap:30,oro:1.0, lakeEvap:0, lith:'石灰岩',down:'basin',  mx:0.13,my:0.36},
+   {key:'basin',name:'盆地',scene:'basin', elev:150,sky:1.0, soilCap:15,oro:0.85,lakeEvap:0.45,lith:'蒸发岩',down:'',     mx:0.10,my:0.66},
+   {key:'cave',name:'洞穴',scene:'cave',  cave:true,parent:'canyon',lith:'石灰岩',down:'',                                mx:0.22,my:0.14},
+  ];
+  for(const r of L){
+    r.dis=new Array(NE).fill(0); r.dep=new Array(NE).fill(0); r.minIn=new Array(NE).fill(0);
+    if(r.cave){ r.Tair=10;r.Tg=10; continue; }
+    r.gbase=GF-LAPSE*r.elev; const init=r.sea?13:8-LAPSE*r.elev;
+    r.Tair=init;r.Tg=init;r.Soil=Math.min(r.soilCap,40);r.V=12;r.C=20;r.Snow=0;r.Lake=r.sea?5000:0;r.storm=0;r.inflow=0;r.runoff=0;r.flow=0;
+    if(r.sea) r.dis=[3000,110,360,110,0.5,5390,750,30,1,0.1,20,0.5];   // 海水谱(Na/Cl主导·富碘)
+  }
+  return L;
+}
+const ROUTES=[['coast','forest',90],['coast','wetland',60],['coast','foothill',120],['forest','canyon',90],['canyon','basin',60],['canyon','cave',30],['foothill','mountain',150]];
+const DIFF=[['coast','forest'],['coast','wetland'],['coast','foothill'],['forest','canyon'],['canyon','basin'],['foothill','mountain']];
+let locs=mkLocs(), byk={}; for(const r of locs) byk[r.key]=r;
+const order=()=>[...locs].filter(r=>!r.cave).sort((a,b)=>b.elev-a.elev);
+let player='coast';
+function neighbors(k){ const out=[]; for(const [a,b,mn] of ROUTES){ if(a===k)out.push([b,mn]); else if(b===k)out.push([a,mn]); } return out; }
+/* ===== 时间 ===== */
+let paused=false, speed=60, acc=0;
+function realDOY(){const n=new Date(),s=new Date(n.getFullYear(),0,0);return Math.floor((n-s)/86400000)-1;}
+function realMin(){const d=new Date();return d.getHours()*60+d.getMinutes()+d.getSeconds()/60;}
+let total=((realDOY()%YEAR+YEAR)%YEAR)*1440+Math.round(realMin());
+function curMin(){return((total%1440)+1440)%1440;} function curDOY(){return((Math.floor(total/1440)%YEAR)+YEAR)%YEAR;}
+function stepMinute(){
+  total++; const m=curMin(),d=curDOY(),slo=sunF(m,d);
+  for(const r of order()){
+    const sl=slo*r.sky;
+    if(r.sea){ const st=seaTemp(d); r.Tg=st; r.Tair+=0.02*(st-r.Tair); }
+    else { r.Tg+=SG*slo*csun(r.C)-SL*(r.Tg-r.gbase); r.Tair+=AG*sl*csun(r.C)-AL*ccool(r.C)*(r.Tair-r.Tg); }
+    const dry=Math.max(0,1-r.V/VaporMax);
+    const Es=Math.min(EvapK*sl*dry,r.Soil), El=Math.min(EvapK*sl*dry*r.lakeEvap,r.Lake);
+    const F=CondK*r.oro*r.V*(0.3+0.7*sl), D=DispK*r.C;
+    let st=r.storm>0.5; if(!st&&r.C>RainHi)st=true; const Rr=st?RainK*r.C:0; if(st&&(r.C-Rr)<RainLo)st=false;
+    const toSnow=(Rr>0&&r.Tair<=SnowTemp)?Rr:0, rainIn=Rr-toSnow;
+    const melt=Math.min(r.Snow,MeltK*Math.max(0,r.Tair-MeltTemp));
+    r.Snow=clamp(r.Snow+toSnow-melt,0,SnowCap);
+    r.V=clamp(r.V+Es+El-F+D,0,50); r.C=clamp(r.C+F-D-Rr,0,100); r.Lake=Math.max(0,r.Lake-El); r.storm=st?1:0;
+    const inW=rainIn+melt+r.inflow, soilAE=r.Soil-Es, space=Math.max(0,r.soilCap-soilAE), infil=Math.min(space,inW);
+    r.Soil=soilAE+infil; r.runoff=inW-infil; r.inflow=0;
+  }
+  const cave=byk.cave, par=byk[cave.parent]; cave.Tg=par.Tg; cave.Tair+=0.02*(par.Tg-cave.Tair);
+  // 矿物：风化(岩石→溶解) + 消化上游来矿
+  for(const r of locs){
+    if(!r.cave&&!r.sea){ const lt=LITHO[r.lith], wet=r.soilCap?r.Soil/r.soilCap:0, tf=Math.max(0,Math.min(1.5,(r.Tair+5)/25));
+      for(let e=0;e<NE;e++) r.dis[e]+=WK*lt[0]*lt[1][e]*wet*tf; }
+    for(let e=0;e<NE;e++){ r.dis[e]+=r.minIn[e]; r.minIn[e]=0; }
+  }
+  // 径流路由（水 + 按浓度携带的溶解矿物，1分钟/跳）
+  for(const r of order()){ if(r.runoff>0){ r.flow=r.runoff;
+      const water=(r.Soil||0)+(r.Lake||0), frac=water>1e-6?r.runoff/water:0;
+      if(r.down){ for(let e=0;e<NE;e++){ const o=Math.min(r.dis[e],frac*r.dis[e]); r.dis[e]-=o; byk[r.down].minIn[e]+=o; } byk[r.down].inflow+=r.runoff; }
+      else r.Lake+=r.runoff;
+      r.runoff=0; } else r.flow*=0.9; }
+  // 析出/回溶：蒸发浓缩→盐壳；遇水→溶回
+  for(const r of locs){ if(r.cave)continue; const w=Math.max((r.Soil||0)+(r.Lake||0),0.01);
+    for(let e=0;e<NE;e++){ const cap=SOL[e]*w;
+      if(r.dis[e]>cap){ r.dep[e]+=r.dis[e]-cap; r.dis[e]=cap; }
+      else if(r.dep[e]>0){ const x=Math.min(r.dep[e],cap-r.dis[e]); r.dep[e]-=x; r.dis[e]+=x; } } }
+  for(const [a,b] of DIFF){ const f=VDIFF*(byk[a].V-byk[b].V); byk[a].V-=f; byk[b].V+=f; }
+}
+function spinUp(){ locs=mkLocs(); byk={}; for(const r of locs)byk[r.key]=r;
+  const target=total,N=2*YEAR*1440; total=target-N; for(let i=0;i<N;i++) stepMinute(); }
+function resetAll(){ total=((realDOY()%YEAR+YEAR)%YEAR)*1440+Math.round(realMin()); acc=0; spinUp(); player='coast'; }
+spinUp();
+/* ===== 旅行 ===== */
+let traveling=null; // {to, left, total}
+function travelTo(k){ const nb=neighbors(player).find(n=>n[0]===k); if(!nb||traveling)return; traveling={to:k,left:nb[1],tot:nb[1]}; }
+function step(dt){ if(paused&&!traveling)return;
+  if(traveling){ const chunk=Math.max(2,Math.round(traveling.tot/45)); for(let i=0;i<chunk;i++){ stepMinute(); if(--traveling.left<=0){ player=traveling.to; traveling=null; break; } } return; }
+  acc+=dt*speed; while(acc>=1){acc--; stepMinute();} }
+/* ===== 渲染 ===== */
+const sc=document.getElementById('scene'),sx=sc.getContext('2d');
+const mc=document.getElementById('mini'),mx=mc.getContext('2d');
+function fit(c){const r=c.getBoundingClientRect(),dp=Math.min(devicePixelRatio||1,2);c.width=r.width*dp;c.height=r.height*dp;c.getContext('2d').setTransform(dp,0,0,dp,0,0);return{w:r.width,h:r.height};}
+let S=fit(sc),M=fit(mc); addEventListener('resize',()=>{S=fit(sc);M=fit(mc);});
+const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t)),rgb=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
+let frame=0;
+function skyAndCelestial(W,H,r,m,d,horizon){
+  const sun=sunF(m,d),moon=moonF(m,d),local=r.cave?0:clamp((LightPeak*sun+MoonPeak*moon)*(r.sky||1),0,100),L=local/100;
+  const nt=[10,14,34],dtp=[78,150,222],nb=[26,30,56],db=[150,196,236];
+  const g=sx.createLinearGradient(0,0,0,horizon); g.addColorStop(0,rgb(mix(nt,dtp,L))); g.addColorStop(1,rgb(mix(nb,db,L)));
+  sx.fillStyle=r.cave?'#0a0d13':g; sx.fillRect(0,0,W,horizon);
+  if(r.cave) return L;
+  const starA=clamp((22-local)/22,0,1);
+  if(starA>0)for(let i=0;i<60;i++){const x=(i*97)%W,y=(i*53)%(horizon-10);sx.fillStyle=`rgba(255,255,255,${starA*(0.5+0.5*Math.sin(i+frame*0.05))*0.9})`;sx.fillRect(x,y,2,2);}
+  const sr=sunriseOf(d),ss=sunsetOf(d),df=(m-sr)/(ss-sr);
+  if(df>=0&&df<=1){const x=df*W,y=horizon-Math.sin(df*PI)*(horizon-26);sx.shadowColor='#ffcf5a';sx.shadowBlur=26;sx.fillStyle='#ffd76a';sx.beginPath();sx.arc(x,y,15,0,7);sx.fill();sx.shadowBlur=0;}
+  else if(moon>0.01){const il=(1-Math.cos(2*PI*moonPhase()))/2,nl=1440-(ss-sr),nm=(m>=ss)?m-ss:m+(1440-ss),nf=nl>0?nm/nl:0,x=nf*W,y=horizon-Math.sin(nf*PI)*(horizon-40);
+    sx.globalAlpha=.3+.7*il;sx.shadowColor='#9fb8ff';sx.shadowBlur=12;sx.fillStyle='#eef2fb';sx.beginPath();sx.arc(x,y,11,0,7);sx.fill();sx.shadowBlur=0;sx.globalAlpha=1;}
+  return L;
+}
+function precip(W,horizon,r){ if(!r.storm)return; const cold=r.Tair<=SnowTemp;
+  for(let i=0;i<70;i++){ const x=(i*89+frame*(cold?2:8))%W, y=((i*61+frame*(cold?5:16))%horizon);
+    if(cold){sx.fillStyle='rgba(255,255,255,.9)';sx.beginPath();sx.arc(x,y,1.7,0,7);sx.fill();}
+    else{sx.strokeStyle='rgba(150,190,255,.6)';sx.lineWidth=1.2;sx.beginPath();sx.moveTo(x,y);sx.lineTo(x-2,y+8);sx.stroke();} } }
+function drawScene(){
+  const W=S.w,H=S.h,r=byk[player],m=curMin(),d=curDOY(),horizon=H*0.66;
+  const L=skyAndCelestial(W,H,r,m,d,horizon);
+  const snowy=(r.Snow||0)>3, wet=(r.Soil||0)/(r.soilCap||100);
+  if(r.scene==='sea'){
+    const sand=mix([60,66,86],[222,205,150],L); sx.fillStyle=rgb(mix([20,60,110],[40,120,180],L)); sx.fillRect(0,horizon-1,W,H*0.20);
+    for(let i=0;i<7;i++){const y=horizon+i*9+(frame*0.4%9);sx.strokeStyle=`rgba(255,255,255,${0.06+0.05*Math.sin(i+frame*0.04)})`;sx.lineWidth=2;sx.beginPath();for(let x=0;x<=W;x+=12)sx.lineTo(x,y+2*Math.sin(x*0.05+frame*0.05+i));sx.stroke();}
+    sx.fillStyle=rgb(sand); sx.beginPath(); sx.moveTo(0,H*0.86); sx.quadraticCurveTo(W*0.5,H*0.80,W,H*0.86); sx.lineTo(W,H); sx.lineTo(0,H); sx.fill();
+  } else if(r.scene==='marsh'){
+    sx.fillStyle=rgb(mix([18,24,30],[70,90,75],L*0.7)); sx.fillRect(0,horizon-1,W,H);
+    for(let i=0;i<5;i++){sx.fillStyle=`rgba(60,110,140,${0.3+0.1*i})`;const y=horizon+15+i*14;sx.beginPath();sx.ellipse(W*(0.2+0.18*i),y,40,7,0,0,7);sx.fill();}
+    sx.strokeStyle=rgb(mix([40,60,40],[90,130,70],L));sx.lineWidth=2;for(let i=0;i<40;i++){const x=(i*53)%W,y=horizon+10+(i*37)%(H*0.3);sx.beginPath();sx.moveTo(x,y);sx.lineTo(x+2*Math.sin(frame*0.05+i),y-16);sx.stroke();}
+    sx.fillStyle='rgba(180,190,200,0.06)';sx.fillRect(0,horizon-30,W,40);
+  } else if(r.scene==='forest'){
+    sx.fillStyle=rgb(mix([16,26,18],[50,90,50],L)); sx.fillRect(0,horizon-1,W,H);
+    for(let i=0;i<16;i++){const x=(i*61+30)%W,h=40+((i*53)%50),y=horizon+8;sx.fillStyle=rgb(mix([10,20,12],[24,60,28],L));sx.beginPath();sx.moveTo(x,y-h);sx.lineTo(x-13,y+6);sx.lineTo(x+13,y+6);sx.closePath();sx.fill();sx.fillRect(x-2,y+4,4,10);}
+  } else if(r.scene==='hills'){
+    sx.fillStyle=rgb(mix([20,28,30],snowy?[210,216,226]:[70,96,66],snowy?0.8:L)); sx.beginPath();sx.moveTo(0,horizon);
+    for(let x=0;x<=W;x+=24)sx.lineTo(x,horizon+10-20*Math.sin(x*0.012));sx.lineTo(W,H);sx.lineTo(0,H);sx.fill();
+  } else if(r.scene==='peak'){
+    const base=rgb(mix([40,46,60],[120,128,150],L));
+    sx.fillStyle=base;sx.beginPath();sx.moveTo(0,H);sx.lineTo(W*0.3,horizon-10);sx.lineTo(W*0.5,horizon-60);sx.lineTo(W*0.7,horizon-10);sx.lineTo(W,H);sx.fill();
+    sx.fillStyle=`rgba(238,243,250,${snowy?0.95:0.4})`;sx.beginPath();sx.moveTo(W*0.5,horizon-60);sx.lineTo(W*0.40,horizon-6);sx.lineTo(W*0.60,horizon-6);sx.closePath();sx.fill();
+    if(snowy){sx.fillStyle='rgba(235,240,248,.9)';sx.fillRect(0,horizon+30,W,H);}
+  } else if(r.scene==='canyon'){
+    sx.fillStyle='rgba(0,0,0,.28)';sx.fillRect(0,0,W,horizon);
+    const wall=rgb(mix([30,24,22],[120,84,64],L*0.7));
+    sx.fillStyle=wall;sx.beginPath();sx.moveTo(0,0);sx.lineTo(W*0.30,0);sx.lineTo(W*0.20,H);sx.lineTo(0,H);sx.fill();
+    sx.beginPath();sx.moveTo(W,0);sx.lineTo(W*0.70,0);sx.lineTo(W*0.80,H);sx.lineTo(W,H);sx.fill();
+    sx.fillStyle=rgb(mix([24,20,18],[70,54,42],L*0.6));sx.fillRect(W*0.2,horizon+20,W*0.6,H);
+  } else if(r.scene==='basin'){
+    sx.fillStyle=rgb(mix([20,28,24],snowy?[210,216,226]:[64,92,60],snowy?0.8:L));sx.fillRect(0,horizon-1,W,H);
+    const lk=clamp((r.Lake||0)/55,0,1); if(r.Lake>0.5){const top=H*0.80-lk*60;const lg=sx.createLinearGradient(0,top,0,H);lg.addColorStop(0,'rgba(90,160,230,.85)');lg.addColorStop(1,'rgba(40,90,160,.9)');sx.fillStyle=lg;sx.beginPath();sx.ellipse(W*0.5,H*0.84,W*0.32,(H*0.84-top),0,0,7);sx.fill();}
+    if(hasCrust(r)){ sx.fillStyle='rgba(238,240,235,0.85)'; for(let i=0;i<60;i++){const x=W*(0.15+0.7*((i*53)%100)/100),y=H*(0.80+0.16*((i*37)%100)/100);sx.beginPath();sx.arc(x,y,1.5+((i*7)%3),0,7);sx.fill();}
+      sx.fillStyle='#cfe0ff';sx.font='bold 12px sans-serif';sx.textAlign='center';sx.fillText('❎ 盐壳/盐滩',W*0.5,H*0.74);sx.textAlign='left'; }
+  } else if(r.scene==='cave'){
+    sx.fillStyle='#10141c';sx.fillRect(0,0,W,H);
+    sx.fillStyle='#0a0d13';sx.beginPath();sx.moveTo(0,0);sx.lineTo(W,0);sx.lineTo(W,H);sx.lineTo(0,H);sx.fill();
+    sx.strokeStyle='#2a3344';sx.lineWidth=3;sx.beginPath();sx.ellipse(W*0.5,H*0.5,W*0.32,H*0.34,0,0,7);sx.stroke();
+    sx.fillStyle='rgba(120,150,200,0.05)';sx.beginPath();sx.ellipse(W*0.5,H*0.5,W*0.30,H*0.32,0,0,7);sx.fill();
+    for(let i=0;i<6;i++){const x=W*(0.3+0.08*i),y=H*0.2+((frame*1.5+i*40)%(H*0.5));sx.strokeStyle='rgba(150,180,220,.3)';sx.beginPath();sx.moveTo(x,y);sx.lineTo(x,y+5);sx.stroke();}
+  }
+  precip(W,horizon,r);
+}
+/* ===== 小地图 ===== */
+let nodeHit=[];
+function drawMini(){
+  const W=M.w,H=M.h; mx.clearRect(0,0,W,H); nodeHit=[];
+  mx.strokeStyle='#33415c';mx.lineWidth=2;
+  for(const [a,b] of ROUTES){const A=byk[a],B=byk[b];mx.beginPath();mx.moveTo(A.mx*W,A.my*H);mx.lineTo(B.mx*W,B.my*H);mx.stroke();}
+  const nb=new Set(neighbors(player).map(n=>n[0]));
+  for(const r of locs){const x=r.mx*W,y=r.my*H,here=r.key===player,adj=nb.has(r.key);
+    mx.fillStyle=here?'#ffd66a':adj?'#4c8dff':'#2b3447'; mx.strokeStyle=here?'#fff3c4':'#1b2331';mx.lineWidth=2;
+    mx.beginPath();mx.arc(x,y,here?11:9,0,7);mx.fill();mx.stroke();
+    mx.fillStyle=here?'#ffd66a':(adj?'#cfe0ff':'#8a96ab');mx.font=(here?'bold ':'')+'11px sans-serif';mx.textAlign='center';
+    mx.fillText(r.name,x,y-14);
+    if(here){mx.fillStyle='#1b1402';mx.font='9px sans-serif';mx.fillText('你',x,y+3);}
+    nodeHit.push({key:r.key,x,y,r:12,adj});}
+  mx.textAlign='left';
+}
+mc.addEventListener('click',e=>{const rect=mc.getBoundingClientRect(),x=e.clientX-rect.left,y=e.clientY-rect.top;
+  for(const n of nodeHit){ if(n.adj&&Math.hypot(x-n.x,y-n.y)<=n.r+3){ travelTo(n.key); break; } }});
+/* ===== HUD / 表 ===== */
+const pad2=n=>String(Math.floor(n)).padStart(2,'0');
+function wxOf(r){ if(r.cave)return '🕳 恒温'; return r.storm?(r.Tair<=SnowTemp?'❄️ 雪':'🌧 雨'):((r.C>45)?'☁️ 阴':(sunF(curMin(),curDOY())>0?'☀️ 晴':'🌙 夜')); }
+function waterOf(r){ if(r.cave)return '🕳 滴水'; if(r.sea)return '🌊 海·咸';
+  const q=drinkable(r)?'🟢可饮':(salinity(r)<0.6?'🟡微咸':'🔴咸'); const dom=domMineral(r);
+  return q+(dom?('·'+dom):'')+(hasCrust(r)?' 盐壳':''); }
+function updateUI(){
+  const r=byk[player],m=curMin(),d=curDOY();
+  document.getElementById('hLoc').textContent=(traveling?('🚶 → '+byk[traveling.to].name):r.name);
+  document.getElementById('hTime').textContent='第'+(Math.floor(total/1440)+1)+'天 '+pad2(m/60)+':'+pad2(m%60)+' · '+seasonName(d);
+  document.getElementById('hWx').textContent=wxOf(r)+' · '+r.Tair.toFixed(0)+'°C · '+(r.cave?'🕳恒温':(r.sea?'🌊海水(咸·不可饮)':(drinkable(r)?'🟢淡水可饮':'🔴水偏咸')));
+  document.getElementById('travel').style.display=traveling?'flex':'none';
+  if(traveling)document.getElementById('travel').textContent='🚶 赶往 '+byk[traveling.to].name+'… 剩 '+traveling.left+' 分钟';
+  let html=''; for(const r2 of locs){ html+=`<tr class="${r2.key===player?'here':''}"><td>${r2.name}</td><td>${r2.Tair.toFixed(0)}°</td><td>${wxOf(r2)}</td><td>${waterOf(r2)}</td></tr>`; }
+  document.getElementById('tbody').innerHTML=html;
+  const nb=neighbors(player); document.getElementById('go').innerHTML='可前往：'+nb.map(n=>`<b data-k="${n[0]}">${byk[n[0]].name}(${n[1]}分)</b>`).join(' · ');
+  document.querySelectorAll('#go b').forEach(b=>b.onclick=()=>travelTo(b.dataset.k));
+}
+let last=performance.now();
+function loop(now){const dt=Math.min((now-last)/1000,0.1);last=now;frame++;step(dt);drawScene();drawMini();updateUI();requestAnimationFrame(loop);}
+requestAnimationFrame(loop);
+/* ===== 控件 ===== */
+document.getElementById('bPause').onclick=function(){paused=!paused;this.textContent=paused?'▶':'⏸';};
+document.querySelectorAll('.spd').forEach(b=>b.onclick=()=>{speed=+b.dataset.s;document.querySelectorAll('.spd').forEach(x=>x.classList.remove('on'));b.classList.add('on');});
+document.getElementById('biome').onchange=e=>{LAT=+e.target.value;resetAll();};
+</script>
+</body>
+</html>
