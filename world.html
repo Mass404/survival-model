@@ -44,6 +44,7 @@
       <div class="loc" id="hLoc">海边</div>
       <div class="time" id="hTime">第1天 00:00 · 🌱春</div>
       <div class="wx" id="hWx">☀️ 晴 · 12°C</div>
+      <div class="wx" id="hGeo" style="font-size:12px;color:#c9b08a"></div>
     </div>
     <div class="travel" id="travel">🚶 赶路中…</div>
   </div>
@@ -62,8 +63,11 @@
         <button class="spd on" data-s="60">60×</button>
         <button class="spd" data-s="600">600×</button>
         <button class="spd" data-s="3600">3600×</button>
+        <button id="bGeo" title="快进地质演化~40年：火山攒压可能喷发、山体长高、灰幕致冷">🌋 地质快进</button>
         <span style="font-size:12px;color:#9aa6ab">纬度</span>
         <select id="biome"><option value="5">赤道5°</option><option value="40" selected>温带40°</option><option value="62">高纬62°</option></select>
+        <span style="font-size:12px;color:#9aa6ab">世界</span>
+        <select id="wtype"><option value="continent" selected>大陆</option><option value="ocean">全海洋</option></select>
       </div>
     </div>
   </div>
@@ -75,59 +79,287 @@ const clamp=(v,a,b)=>v<a?a:v>b?b:v, PI=Math.PI, lerp=(a,b,t)=>a+(b-a)*t;
 /* ===== 全局天空 ===== */
 let YEAR=365,LAT=40,TILT=23.44,EQDAY=80,SYN=29.53;
 const decl=d=>TILT*PI/180*Math.sin(2*PI*(d-EQDAY)/YEAR);
-function sunF(m,d){const phi=LAT*PI/180,de=decl(d),H=2*PI*(m/1440)-PI;const e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H);return e>0?e:0;}
+/* 恒星列表(可多颗=双星系统)：每颗{光通量,视日长,相位}。sunF=对每颗高度×光通量求和。
+   默认单颗=现有(校准基准)；视日长不同的两颗→白昼/日照拍频(对齐=双日高温+真夜，错开=长昼少夜)。 */
+const SUNS=[
+  {name:'太阳', flux:1.0, dayLen:1440, phase:0.0},   // 默认单恒星(标定基准)。加一行即成双星系统
+];
+function sunElev(su,m,d){ const phi=LAT*PI/180,de=decl(d),H=2*PI*(((total/su.dayLen)+su.phase)%1)-PI; return Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H); }
+function sunF(m,d){ let s=0; for(const su of SUNS){ const e=sunElev(su,m,d); s+=su.flux*(e>0?e:0); } return s; }  // 各恒星求和(默认单颗=现有)
 function halfDay(d){const phi=LAT*PI/180;let x=-Math.tan(phi)*Math.tan(decl(d));x=clamp(x,-1,1);return Math.acos(x)/PI*720;}
 const sunriseOf=d=>720-halfDay(d),sunsetOf=d=>720+halfDay(d);
 const seasonName=d=>['🌱春','☀️夏','🍂秋','❄️冬'][Math.floor(((d-EQDAY)%YEAR+YEAR)%YEAR*4/YEAR)];
-const moonPhase=()=>((total/1440/SYN)%1+1)%1;
-function moonF(m,d){const f=moonPhase(),il=(1-Math.cos(2*PI*f))/2,phi=LAT*PI/180,de=decl(d+f*YEAR),H=2*PI*(m/1440)-PI-2*PI*f;const e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H);return il*(e>0?e:0);}
+// 夜光：对所有卫星求和(各自周期×相位照度×高度×视亮度) —— 双月夜更亮、各按自己周期盈亏升落
+function moonLight(m,d){ let s=0; for(const o of MOONS){ const f=((total/1440/o.period)%1+1)%1, il=(1-Math.cos(2*PI*f))/2, phi=LAT*PI/180, de=decl(d+f*YEAR), H=2*PI*(m/1440)-PI-2*PI*f, e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H); s+=o.bright*il*(e>0?e:0); } return s*(1-eclLunar); }   // 满月入地影→月食变暗(用缓存)
+const SUNANG=0.267;   // 太阳视半径(度)
+function eclipseCover(m,d,lunar){    // 日食(lunar=false:新月遮日,削日照)/月食(true:满月入地影,夜里月变暗)的遮挡比例
+  let cov=0; const t=total/1440;     // 倾角inc+交点(交点月≈朔望×0.9215)→只有新/满月恰过黄道面(β≈0)才成食→确定性地稀少
+  for(const o of MOONS){ const f=((t/o.period)%1+1)%1, beta=(o.inc||0)*Math.sin(2*PI*(t/(o.period*0.9215))+0.37);
+    if(!lunar){ const dlon=360*(f<0.5?f:f-1), sep=Math.hypot(dlon,beta);
+      if(sep>=SUNANG+o.angR) continue;
+      const c = sep<=Math.abs(o.angR-SUNANG) ? Math.min(1,(o.angR/SUNANG)**2)        // 全食(月≥日)/环食(月<日,按面积比)
+                                             : Math.min(1,(SUNANG+o.angR-sep)/(2*SUNANG));  // 偏食:日面被切入深度
+      cov=Math.max(cov,c);
+    } else { const um=Math.atan(PLANET.radiusKm/o.distKm)*180/PI-SUNANG, dlon=360*(f-0.5), sep=Math.hypot(dlon,beta);  // 地影锥半径(度)
+      if(sep>=um+o.angR) continue;
+      cov=Math.max(cov, sep<=Math.abs(um-o.angR)?1:clamp((um+o.angR-sep)/(2*o.angR),0,1)); } }
+  return cov;
+}
+/* ===== 行星基本参数（变化极慢→当常量；用来推导 g/标高/直减率/日照 等初始值）===== */
+const PLANET={mass:5.972e24, radiusKm:6371, rotationH:24, orbitDays:365, starFlux:1.0, radio:1.0, metallicity:1.0};  // 默认地球。metallicity=星系化学演化代(太阳=1;贫金属第一代→0)
+/* 分层周期表 + 核合成起源：33 种单独追踪(有循环);其余并成组(聚合丰度+起源)。
+   宇宙丰度由核合成定:BB大爆炸(H/He)·FU恒星聚变(C→Fe峰)·SN超新星/中子星(>Fe重元素,∝metallicity)。 */
+const PERIODIC=[  // [组, log10丰度(H=12), 起源]
+  ['氢H',12,'BB'],['氦He',11,'BB'],['氧O',8.9,'FU'],['碳C',8.4,'FU'],['氖等轻挥发',8.0,'FU'],
+  ['Mg/Si',7.5,'FU'],['Fe峰(Fe/Ni/Cr/Mn)',7.4,'FU'],['硫S',7.1,'FU'],['Na/Ca/K/Al',6.3,'FU'],
+  ['惰性气体(Ar/Kr/Xe/Rn)',6.5,'FU'],['卤素(F/Cl/Br/I)',5.5,'FU'],['过渡金属(Ti/Cu/Zn/Mo/Co…)',4.3,'FU'],
+  ['碱金属碱土次要',3.0,'FU'],['稀土REE',2.2,'SN'],['重金属(Sn/Pb/Ag/Au/Hg)',2.0,'SN'],['放射性(U/Th)',0.3,'SN']];
+const metalScale=o=>o==='BB'?1:o==='SN'?Math.pow(PLANET.metallicity,1.3):PLANET.metallicity;  // 重元素(SN)对代数更敏感
+const HEAVY=new Set([9,12,13,14,15,20,23,24]);  // 超新星产的稀有重元素(Cu/Sn/Pb/Ag/Au/Hg/U/Th):丰度∝金属丰度→贫金属行星无矿无核燃料
+const _G=6.674e-11,_Rgas=8.314,_Mair=0.029,_Tatm=273;        // 物理常量 + 大气代表温度
+const pR=PLANET.radiusKm*1000;
+const pG=_G*PLANET.mass/(pR*pR);                              // 重力 g=GM/R²
+const pH=_Rgas*_Tatm/(_Mair*pG);                             // 大气标高 H=RT/(M_air·g)→气压 e^(-z/H)
+const pLapse=6.5*(pG/9.8)/1000;                              // 气温直减率 ∝ g (°C/m)
+const pInsol=PLANET.starFlux;                                // 太阳常数倍率(∝恒星光度/轨道距离²)
+const pVesc=Math.sqrt(2*pG*pR), pDensity=PLANET.mass/(4/3*PI*pR**3), pKmDeg=2*PI*pR/1000/360;  // 逃逸速度/密度/每度km(读出)
+/* ===== 磁场(地磁发电机): B ∝ 核活动(内部热)×自转。偶极→磁极强。耦合:大气屏蔽/逃逸·地表辐射·极光。与火山同根 ===== */
+const magBsurf=50, magBcrit=20, magRot=24/PLANET.rotationH;   // 参考地表场μT / 屏蔽住太阳风所需场 / 自转因子(越快越强)
+let radioFuel=PLANET.radio*metalScale('SN');                   // 放射性燃料(U/Th/K)∝金属丰度(超新星产物),按地质时间衰变；贫金属→几乎无→冷核
+let coreActivity=Math.min(1, radioFuel/(6371/PLANET.radiusKm));// 核对流活动 = 放射成因热/散热(∝1/R)：地球≈1稳定;小行星散热快→偏低;贫铀→偏低
+
+const magField=()=>magBsurf*coreActivity*magRot;              // 地表磁场强度 μT
+const magDipole=lat=>{const s=Math.sin(lat*PI/180);return magField()*Math.sqrt(1+3*s*s)/2;};  // 偶极:磁极强、赤道弱
+const magShield=()=>Math.min(1,magField()/magBcrit);          // 大气屏蔽率(强场→1=不漏)
+function radiationAt(r){ const s=magShield()*(1-0.6*Math.abs(Math.sin(LAT*PI/180))), cosmic=Math.max(0.02,(1-s))*Math.exp(-Patm(r.elev||0));  // 宇宙/太阳:磁极funnel高+薄气高
+  const uth=r.dis?(r.dis[23]+r.dis[24]+r.dep[23]+r.dep[24]):0, geo=0.2*uth+1.5*(r.radon||0); return cosmic+geo; }  // +地质:U/Th岩石本底 + 氡气(洞穴积聚)
+const auroraStrength=()=>Math.max(0,(Math.abs(LAT)-50)/40)*Math.min(1,magField()/magBcrit);  // 高磁纬(>50°)+有场channel→极光
 /* ===== 模型常量（与 C#/hub3 同构）===== */
-const LightPeak=100,MoonPeak=4,AG=0.10,AL=0.007,SG=0.0065,SL=0.00007,GF=-16,LAPSE=6.5/1000;
+const LightPeak=100,MoonPeak=4,AG=0.10,AL=0.007,SG=0.0065,SL=0.00007,GF=-16,LAPSE=pLapse;  // 直减率由 g 推导
+/* 气候纬度基准：高纬冷/低纬暖(年均辐射平衡推导,锚定40°N=GF→既有标定不变)。随大陆漂移 LAT 改→气候带改写 */
+const eqTemp=(lat,dc)=>30-65*(1-Math.cos((lat-dc)*0.9*PI/180));
+const annualMeanEqT=lat=>{let s=0;for(let d=0;d<YEAR;d++)s+=eqTemp(lat,decl(d));return s/YEAR;};
+let CLIMBASE=GF;
+const updClimBase=()=>{CLIMBASE=GF+(annualMeanEqT(LAT)-annualMeanEqT(40));_ringDay=-1;};  // 慢量,只在LAT变时重算(并失效环影缓存)
 const EvapK=0.035,VaporMax=45,CondK=0.0045,DispK=0.001,RainK=0.015,RainHi=42,RainLo=12;
 const SnowTemp=1.0,MeltTemp=0.0,MeltK=0.006,VDIFF=0.015,SnowCap=600;
+// 水汽温室反馈(Clausius-Clapeyron:暖→饱和水汽压↑→水汽↑→温室↑) + 云反照率(暖→云↑→反射阳光↓→致冷,与水汽打擂台)
+const cVapGH=0.045, Vref=14, cVsatT=16, cCloudAlb=0.15;   // cVsatT:饱和水汽温敏(每16℃翻倍≈4.4%/℃);锚定基线水汽Vref→默认地球不变
+// 土壤发育/地下水:soilDepth风化造土÷径流剥土;GW深渗补给→旱季基流。pedK造土 erodK剥土 gwRech补给 gwBase基流
+const pedWeatherK=2e-4, pedErodeK=8e-5, soilCapBase=18, soilCapPerM=22, gwRechK=0.04, gwBaseK=0.006, gwCap=400;
 const csun=C=>1-0.8*C/100,ccool=C=>1-0.6*C/100;
 const seaTemp=d=>13+6*Math.sin(2*PI*(d-110)/YEAR);
+/* 潮汐：引力梯度 ∝ M/d³ → 太阳潮自动=月亮潮×0.46；月+日半日潮相加 → 大/小潮涌现 */
+/* 卫星列表(可多颗,各自周期)：由 质量/距离 推导 潮汐力∝M/d³ 与 视亮度∝半径²/d²(半径∝M^(1/3)) */
+const MOONS=[
+  {name:'月', mass:7.342e22, distKm:384400, period:29.53, inc:5.14},   // 默认单卫星(inc=轨道倾角,日月食稀有性来源)。加一行即成多卫星系统
+];
+const _Ksun=1.989e30/Math.pow(1.496e11,3);
+MOONS.forEach(o=>{ o.d=o.distKm*1000; o.K=o.mass/Math.pow(o.d,3); o.glow=Math.pow(o.mass,2/3)/(o.d*o.d);
+  o.radiusKm=1737*Math.cbrt(o.mass/7.342e22); o.angR=Math.atan(o.radiusKm/o.distKm)*180/PI; });   // 半径∝质量^⅓;视半径(度)→日月食几何
+const _ampScale=0.5/MOONS[0].K, _glowScale=4/MOONS[0].glow;    // 标定:主月半日潮振幅≈0.5m、满月夜光≈4
+MOONS.forEach(o=>{ o.amp=o.K*_ampScale; o.bright=o.glow*_glowScale; });
+/* 行星环(土星式):赤道面粒子盘。inner/outer=内外缘(行星半径单位),opacity=遮光,glow=反照夜光标定。null=无环。
+   两个确定性效应,都挂在已有赤纬上:①环影=环在冬半球投影削日照→冬季深寒(分点边缘对日→归零,δ翻号→换半球);②环光=被照亮的环反射到夜半球(夏半球更亮,像月光)。 */
+const RING=null;   // 默认地球:无环。土星式环示例:{inner:1.2, outer:2.5, opacity:0.7, glow:9}
+function ringShadow(latRad,deRad){    // 该纬度当日日照被环影削减的比例(0~opacity);几何积分,确定性
+  if(!RING) return 0; const sz=Math.sin(deRad); if(Math.abs(sz)<1e-3) return 0;   // 分点:环侧对太阳→影成赤道细线≈0
+  const sx=Math.cos(deRad); let lit=0,blk=0;
+  for(let k=0;k<24;k++){ const lam=(k+0.5)/24*2*PI;
+    const px=Math.cos(latRad)*Math.cos(lam), py=Math.cos(latRad)*Math.sin(lam), pz=Math.sin(latRad);
+    const mu=px*sx+pz*sz; if(mu<=0) continue; lit+=mu;          // 白昼受照才算
+    const t=-pz/sz; if(t<=0) continue;                          // 射线朝太阳侧穿过环面(t>0→冬半球)
+    const rho=Math.hypot(px+t*sx, py); if(rho>=RING.inner&&rho<=RING.outer) blk+=mu*RING.opacity; }
+  return lit>0?blk/lit:0;
+}
+function ringShine(latRad,deRad){     // 环反射夜光(接月光量纲):∝环被照亮程度|sinδ|,夏半球看到被照面更多
+  if(!RING) return 0; return RING.glow*Math.abs(Math.sin(deRad))*((latRad*deRad>0)?1:0.4);
+}
+const tAs=_Ksun*_ampScale;                                     // 太阳半日潮振幅(同一标定)
+const tSpring=2*(tAs+MOONS.reduce((s,o)=>s+o.amp,0));          // 全部连珠时的最大潮范围
+const phaseOf=o=>((total/1440/o.period)%1+1)%1;                // 该卫星当前月相(各自周期)
+function tideLevel(tot){ const mod=((tot%1440)+1440)%1440, Hs=2*PI*(mod/1440)-PI; let s=tAs*Math.cos(2*Hs);
+  for(const o of MOONS){ const f=((tot/1440/o.period)%1+1)%1, Hm=Hs-2*PI*f; s+=o.amp*Math.cos(2*Hm); } return s; }  // 各卫星半日潮(各自周期)+太阳 求和
+function tideRange(){ let lo=9,hi=-9, base=total-(total%1440); for(let t=0;t<1440;t+=20){const v=tideLevel(base+t); if(v<lo)lo=v; if(v>hi)hi=v;} return hi-lo; }  // 多卫星拍频→数值采样当日潮差
+const tideExposed=()=>clamp(-tideLevel(total)/(tSpring/2),0,1);   // 潮间带露出比例 0..1
+/* 地质（C# Geology 镜像，按"地质年"推进）：张弛攒压→喷发·永久改地形·抬升vs侵蚀平衡·火山灰致冷 */
+const gFlux=1.0,gStr=18,gOverK=0.012,gPoreK=6,gLava=1.0,gAsh=0.03,gEroK=0.0005,gSedDown=0.7,gAeroDec=0.55,gAeroDim=0.25,gLithSw=300,gLithThr=30,gLithFrac=0.02;
+let VOLC='mountain';   // 火山口=最高陆地区(随世界类型动态:大陆→山顶,水世界→火山岛)
+/* 板块构造（C# Planet 镜像）：地幔对流→板块速度→汇聚度→活动度/俯冲/漂移。无随机 */
+const tConvCells=2,tPlateV=1.0,tDriftLat=-0.015,tPatchLon=125;
+const tVplate=lon=>tPlateV*Math.sin(2*Math.PI*tConvCells*lon/360);
+const tConverg=lon=>{const h=0.5;return -(tVplate(lon+h)-tVplate(lon-h))/(2*h);};
+const tActivity=lon=>Math.max(0.3,0.3+50*Math.abs(tConverg(lon)));
+const tIsSub=lon=>tConverg(lon)>0.005;
+const tRegime=lon=>{const c=tConverg(lon);return c>0.005?'汇聚·俯冲造山':c<-0.005?'离散·洋脊裂谷':'板内·平静';};
+let magmaP=0,tecStress=0,aerosol=0,cumLava=0,geoSkyDim=0,geoYearN=0,eruptFx=0,geoLive=false,lastGeo='—';
+let ecc=0.0167, milankFlux=1, atmMass=1, seaLevel=0, refIce=-1;   // 米兰科维奇(偏心率/日照调制) + 大气总量(地球=1) + 海平面(冰川性,m) + 基准冰量
+let curRingSh=0, curRingShine=0, eclSolar=0, eclLunar=0, _ringDay=-1;   // 性能:环影/环光只随"第几天"变→每天算一次;日/月食每步各算一次→各处复用(原本每帧重复算)
+const gWet=r=>r.soilCap?clamp(r.Soil/r.soilCap,0,1.2):0.5;
+function geoYear(){ const v=byk[VOLC],wet=gWet(v);
+  // 放射成因热:U/Th/K 燃料衰变→内部热→coreActivity(=磁场+火山的根)。散热∝1/R(小行星早死)。地球数十亿年仍热
+  radioFuel*=(1-3e-5); coreActivity=Math.min(1, radioFuel/(6371/PLANET.radiusKm));
+  // 米兰科维奇:倾角/偏心率/岁差极慢确定性振荡(周期已压缩到地质快进可见,比例守41:100:23kyr)→调制季节日照→与冰反照率/冰川咬合涌现冰期
+  const ky=geoYearN; TILT=23.44+1.2*Math.sin(2*PI*ky/300); ecc=0.02+0.02*Math.sin(2*PI*ky/700); EQDAY=80+28*Math.sin(2*PI*ky/170);
+  milankFlux=1+ecc*Math.cos(2*PI*ky/170);                          // 偏心率×岁差→年日照微调(进动定近日点落在哪个季节)
+  // 大气总量演化:火山脱气(源) vs 逃逸(弱磁场/低重力/高温) vs 风化埋碳(汇)。地球平衡;弱场如火星→逃逸>脱气→漏光
+  const outgas=2.2e-4*tActivity(tPatchLon)*coreActivity, escape=atmMass*(2.6e-4*(1-magShield())+1.0e-4+8e-6*(9.8/pG));   // 逃逸=太阳风剥(弱磁场)+俯冲埋藏(本底汇)+热逃逸(低重力);地球:脱气≈本底汇→稳,火星弱场→剥光
+  atmMass=Math.max(0.02, atmMass+outgas-escape);
+  globalCO2*=(1-0.002*(1-magShield()));                            // 磁场弱→太阳风剥大气(地球屏蔽1→不漏;火星式→CO₂逃逸)
+  const tect=tActivity(tPatchLon);                                  // 构造活动度(活动陆缘→活跃)
+  if(tIsSub(tPatchLon)) for(const r of locs){ const sub=0.02*(r.sediment||0); r.sediment-=sub; magmaP+=sub; }  // 俯冲重熔:沉积→岩浆(闭合岩石循环)
+  LAT=Math.max(-80,Math.min(80,LAT+tDriftLat)); updClimBase();      // 大陆漂移→纬度变→sunF + 气候基准 双双改写
+  magmaP+=gFlux*tect*coreActivity; const erThr=gStr+gOverK*v.elev-gPoreK*(wet-0.5)*2;  // 火山∝核活动(死亡链:核熄→火山停)
+  if(magmaP>=erThr){ geoErupt(v,magmaP); magmaP=0; }
+  tecStress+=tect; const qThr=40-gPoreK*(wet-0.5)*2;
+  if(tecStress>=qThr){ geoQuake(v,tecStress); tecStress=0; }
+  for(const r of locs){ if(r.sea||r.cave)continue;
+    const ero=gEroK*(0.5+gWet(r))*r.elev; r.elev=Math.max(0,r.elev-ero); r.gbase=CLIMBASE-LAPSE*r.elev;
+    const dn=byk[r.down]; if(dn&&!dn.cave){ dn.sediment=(dn.sediment||0)+ero*gSedDown;
+      for(const i of PLACER){ const mv=cPlacerK*(r.dis[i]||0); r.dis[i]-=mv; dn.dep[i]=(dn.dep[i]||0)+mv; } } }   // 砂矿:重稳矿物(Au/Sn/Ti)随侵蚀搬运→下游低能段按密度富集(锁定)
+  for(const r of locs){ if(r.cave)continue; if((r.sediment||0)>gLithThr){     // 固结:埋藏沉积物→沉积岩(岩性按成分)
+      const lith=gLithFrac*(r.sediment-gLithThr); r.sediment-=lith; r.elev+=lith; r.gbase=CLIMBASE-LAPSE*r.elev; r.lith=classifySed(r); } }
+  geoSkyDim=Math.min(0.8,gAeroDim*aerosol); aerosol*=gAeroDec; geoYearN++; }
+function classifySed(r){ const d=r.dep||[]; const salt=(d[0]||0)+(d[5]||0)+(d[6]||0), carb=(d[1]||0)+(d[7]||0), sil=(d[8]||0);
+  if(salt>carb&&salt>sil&&salt>0.5)return'蒸发岩'; if(carb>sil&&carb>0.5)return'石灰岩'; if(sil>0.3)return'砂岩'; return'黏土'; }
+function geoErupt(v,rel){ const lava=gLava*rel; v.elev+=lava; v.gbase=CLIMBASE-LAPSE*v.elev; cumLava+=lava;
+  if(cumLava>gLithSw) v.lith='玄武岩'; aerosol+=gAsh*rel;
+  v.Tair+=8; v.co2+=3; globalCO2+=0.004*rel; v.dep[16]+=0.5*rel; v.dis[19]+=0.02*rel; v.dis[3]+=0.02*rel; v.veg=Math.max(0,v.veg-0.3);  // 喷发注入全球碳库
+  for(const [i,k] of HYDRO) v.dep[i]+=k*rel;   // 热液脉:岩浆热液在火山口沉淀Cu/Pb/Zn/Ag/Au/Sn/Mo/Hg硫化物→铜铅锌金矿带
+  for(let e=0;e<NE;e++){ if(e===18){ subPool[18]=0; continue; } const ret=eruptReturnK*subPool[e]; subPool[e]-=ret; v.dis[e]+=ret; }   // 俯冲池随岩浆返还火山→溶出(闭合幔-壳元素循环);硝酸盐高温热解→放N₂回大气(非生物闭合氮)
+  for(const [a,b] of DIFF){ const nk=a===v.key?b:(b===v.key?a:null), n=nk&&byk[nk]; if(n&&!n.sea&&!n.cave){ n.veg=Math.max(0,n.veg-0.15); n.dis[19]+=0.01*rel; for(const [i,k] of HYDRO) n.dep[i]+=0.3*k*rel; } }   // 邻区周缘脉(0.3×)
+  lastGeo=`🌋 喷发(强度${rel.toFixed(0)}·+${lava.toFixed(0)}m)`; eruptFx=240; }
+function geoQuake(v,rel){ v.elev+=0.06*rel; v.gbase=CLIMBASE-LAPSE*v.elev;
+  const dn=byk[v.down]; if(dn&&!dn.sea&&!dn.cave){ const slide=Math.min(v.elev*0.02,0.25*rel); v.elev-=slide; dn.elev+=slide*gSedDown; dn.gbase=CLIMBASE-LAPSE*dn.elev; }
+  lastGeo=`🜨 地震(强度${rel.toFixed(0)})→滑坡`; }
 /* ===== 矿物（Na Ca Mg K Fe，与 C# WaterChemistry 同构）===== */
-const MN=['钠','钙','镁','钾','铁','氯','硫酸盐','碳酸盐','硅','铜','碘','锌'], NE=12, WK=0.0006;
-const SOL=[8.0,0.4,2.0,3.0,0.05,9.0,1.2,0.6,0.08,0.03,12.0,0.2];
-const LITHO={  // Na Ca Mg K Fe | Cl SO4 HCO3 SiO2 Cu | I Zn
-  花岗岩:[0.4,[0.02,0.05,0.02,0.15,0.02,0.01,0.02,0.05,0.40,0.005,0.0,0.02]],
-  石灰岩:[1.0,[0.03,0.80,0.15,0.02,0.01,0.02,0.10,0.90,0.05,0.005,0.0,0.02]],
-  玄武岩:[0.8,[0.05,0.30,0.40,0.05,0.35,0.02,0.08,0.15,0.20,0.30,0.0,0.15]],
-  砂岩:  [0.5,[0.05,0.05,0.03,0.03,0.03,0.03,0.03,0.04,0.50,0.01,0.0,0.02]],
-  蒸发岩:[1.5,[1.50,0.50,0.20,0.10,0.00,1.40,0.80,0.10,0.02,0.0,0.0,0.05]],
-  黏土:  [0.7,[0.10,0.20,0.20,0.15,0.10,0.08,0.10,0.20,0.15,0.05,0.0,0.20]]};
+const MN=['钠','钙','镁','钾','铁','氯','硫酸盐','碳酸盐','硅','铜','碘','锌','锡','铅','银','金','硫','碳','硝','磷','汞','硼','氟','铀','钍','铝','锰','钛','镍','铬','钼','钴','硒'], NE=33, WK=0.0006;
+// 新增索引: 23铀 24钍 25铝 26锰 27钛 28镍 29铬 30钼 31钴 32硒  (放射性U/Th · 造岩金属Al/Mn/Ti/Ni/Cr · 生命微量Mo/Co/Se)
+/* 碳循环恒温器：火山排CO₂ vs 风化吸CO₂ → 全球CO₂涌现；温室作用相对基线偏差；风化剥蚀岩石 */
+const CO2ref=2.0,cGhouse=1.5,cWeatherCO2K=6e-5,cVolcOutgas=1.25e-4,cChemErodeK=1e-6,cSeafloorK=1.1e-5;  // cSeafloorK:海底风化(无陆碳汇,~0.3×陆地/区)
+let globalCO2=2.0;
+const SOL=[8.0,0.4,2.0,3.0,0.05,9.0,1.2,0.6,0.08,0.03,12.0,0.2,0.002,0.004,0.003,0.0005,0.5,0.1,10.0,0.05,0.001,1.5,0.8,
+  0.01,0.0002,0.001,0.3,0.0005,0.05,0.02,0.4,0.05,0.3];  // +铀(铀酰可溶)钍铝(惰)锰钛(惰)镍铬钼(可溶)钴硒
+const ORES=[[4,'铁'],[9,'铜'],[12,'锡'],[13,'铅'],[14,'银'],[15,'金'],[16,'硫'],[17,'煤'],[18,'硝石'],[20,'汞'],[21,'硼砂'],
+  [23,'铀'],[25,'铝土'],[26,'锰'],[27,'钛'],[28,'镍'],[29,'铬']];  // 可采矿床(沉积)
+const LITHO={  // Na Ca Mg K Fe|Cl SO4 HCO3 SiO2 Cu|I Zn|Sn Pb Ag Au S C|硝 P Hg B F | 铀 钍 铝 锰 钛 镍 铬 钼 钴 硒
+  花岗岩:[0.4,[0.02,0.05,0.02,0.15,0.02,0.01,0.02,0.05,0.40,0.005,0.0,0.02,0.20,0.01,0.005,0.02,0.01,0.0,0.0,0.02,0.0,0.0,0.15, 0.15,0.20,0.40,0.05,0.05,0.0,0.0,0.02,0.0,0.0]],   // 长英质:富U/Th/Al
+  石灰岩:[1.0,[0.03,0.80,0.15,0.02,0.01,0.02,0.10,0.90,0.05,0.005,0.0,0.02,0.0,0.25,0.10,0.0,0.05,0.02,0.02,0.20,0.05,0.0,0.02, 0.05,0.02,0.05,0.10,0.0,0.0,0.0,0.05,0.0,0.02]],
+  玄武岩:[0.8,[0.05,0.30,0.40,0.05,0.35,0.02,0.08,0.15,0.20,0.30,0.0,0.15,0.01,0.02,0.01,0.005,0.30,0.0,0.0,0.15,0.08,0.0,0.03, 0.01,0.02,0.20,0.20,0.30,0.25,0.30,0.0,0.20,0.02]],  // 镁铁质:富Ni/Cr/Co/Ti
+  砂岩:  [0.5,[0.05,0.05,0.03,0.03,0.03,0.03,0.03,0.04,0.50,0.01,0.0,0.02,0.0,0.0,0.0,0.005,0.02,0.15,0.02,0.02,0.0,0.0,0.01, 0.10,0.02,0.05,0.02,0.10,0.0,0.0,0.05,0.0,0.10]],   // 砂岩型铀矿·钛砂·硒
+  蒸发岩:[1.5,[1.50,0.50,0.20,0.10,0.00,1.40,0.80,0.10,0.02,0.0,0.0,0.05,0.0,0.0,0.0,0.0,0.40,0.0,0.30,0.0,0.0,0.40,0.02, 0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.10,0.0,0.20]],
+  黏土:  [0.7,[0.10,0.20,0.20,0.15,0.10,0.08,0.10,0.20,0.15,0.05,0.0,0.20,0.0,0.03,0.01,0.0,0.05,0.30,0.15,0.10,0.01,0.02,0.02, 0.05,0.10,0.40,0.15,0.10,0.10,0.10,0.05,0.10,0.05]]};  // 黏土=铝硅酸盐:富Al
+const oresOf=r=>r.dep?ORES.filter(([i])=>r.dep[i]>0.05).map(([i,n])=>n+r.dep[i].toFixed(1)).join(' '):'';
+// 金属成矿(蒸发结晶之外的三路真实成矿)。金属矿物=稳定氧化物/硫化物,沉淀后不回溶→LOCKED
+const LOCKED=new Set([4,9,11,12,13,14,15,16,20,25,26,27,28,29,30]);   // Fe Cu Zn Sn Pb Ag Au S Hg Al Mn Ti Ni Cr Mo:成矿后锁定(盐仍按溶解度回溶)
+const HYDRO=[[9,0.08],[13,0.03],[11,0.04],[14,0.006],[15,0.0015],[12,0.02],[30,0.01],[20,0.008]];  // 热液硫化物套:Cu Pb Zn Ag Au Sn Mo Hg(×喷发强度,沉于火山口+邻区)
+const LATER=[[4,0.35],[25,0.20],[26,0.20],[27,0.30],[28,0.30],[29,0.25]];   // 红土残积:Fe Al Mn Ti Ni Cr(不溶,湿热淋滤后残留;系数=玄武岩母岩含量参考)
+const PLACER=[15,12,27], cLaterK=2e-5, cPlacerK=0.15;   // 砂矿:Au Sn Ti(重稳矿物,搬运中下游富集)
+// 海洋元素闭环(堵"洋盆死胡同"):溶解质冲入海→超出海水本底的部分被海底沉积埋藏→俯冲池→火山喷发返还→再风化。硝酸盐俯冲到火山高温热解放N₂(非生物闭合氮,非反硝化)
+const SEAREF=[3000,110,360,110,0.5,5390,750,30,1,0.1,20,0.5,0,0,0,0,2,0,5,0.1,0,5,1, 3.3,0,0,0,0,0.5,0.2,10,0,0.1];  // 海水本底谱(也作初值)
+const seaBuryK=5e-4, eruptReturnK=0.3; let subPool=new Array(33).fill(0);   // 海洋埋藏率(对超出本底)/喷发返还比例 + 俯冲元素缓冲池
+// 海底热液喷口(生命摇篮):喷热+还原流体(H2/H2S,蛇纹石化)+金属硫化物烟囱。还原剂redu与海水氧化剂(CO2/SO4)失衡=可用化学自由能
+const ventHeatK=6, ventReduK=0.05, reduDecayK=0.02, ventMetalK=0.0015, ventSulfK=0.004;
+// 史前有机化学(蛋白质,生命之前):合成(能量×原料)→缩合聚合(催化×浓缩)↔水解(湿)→缓慢降解(无氧极慢)。确定性,干湿张弛,守恒
+const oSynK=5e-4, oPolyK=2e-3, oHydK=8e-5, oDecK=6e-7, oCfrac=0.02;
+// 自我复制分子(第一缕生命):自催化(∝repl)×Monod底物(吃有机汤org+prot)×温度适应度。点燃=汤过阈(确定性起源);rTopt确定性追当地温(环境选择)
+const rBirthK=0.15, rDeathK=0.03, rKhalf=4, rYield=0.6, rWidth=14, rIgnite=5, rSeed=0.02, rAdaptK=0.06;
+// 化能自养:代谢型rAuto(异养0↔自养1)作第二性状,按适应度确定性漂移;自养用还原剂(喷口H2)+固CO2自产食(挣脱原始汤天花板=生物碳泵)
+const rBirthAutoK=0.11, rAutoAdaptK=0.5, cFixK=0.08, rReduK=0.2;
+/* ===== 大气成分 O2/CO2（独立气体层；与 C# Atmosphere 同构）===== */
+const O2SL=0.001,CO2B=2.0;   // 无生命：O₂≈0(缺氧)、CO₂-N₂主导(火山脱气、无植物吸收)
+const Patm=e=>Math.exp(-(e||0)/pH), o2base=r=>O2SL*Patm(r.elev);   // 标高 pH 由 g 推导(替换写死的8000)
+const VEG={coast:0,wetland:0,forest:0,foothill:0,mountain:0,canyon:0,basin:0,cave:0};   // 全 0：世界无生命
+/* 局部风（C# Wind 镜像）：盛行风背景 + 白天热力环流 + 夜间下坡风 + 风暴阵风 */
+const PREVAIL=2.6, wKBase=1.0,wKThermal=3.0,wKKata=5.0,wKGust=5.0,wKEvap=0.05,wChillK=2.5;
+function windOf(r){ const sun=sunF(curMin(),curDOY());
+  return wKBase*Math.abs(PREVAIL)+wKThermal*sun*(r.sky||1)+wKKata*((r.elev||0)/1000)*(1-sun)+wKGust*(r.storm||0); }
+const feelsLike=(t,w)=>t-wChillK*Math.sqrt(Math.max(0,w))*Math.max(0,33-t)/33;
+function windCause(r){ if(r.storm>0.5)return'阵风'; const sun=sunF(curMin(),curDOY());
+  const th=wKThermal*sun*(r.sky||1),ka=wKKata*((r.elev||0)/1000)*(1-sun); return ka>th&&ka>1?'下坡风':th>1?'海风/谷风':'盛行风'; }
+/* 风蚀/尘暴（C# Dust 镜像）：松尘↔悬浮尘，风超阈起尘×干燥，落定，悬浮尘遮日 */
+const dSupplyK=0.0005,dWindThr=4.0,dDeflK=0.0020,dSettleK=0.05,wDustDimK=0.06,dMaxDim=0.6,dLooseCap=40;
+/* 冰与冻融（C# Ice 镜像）：冻融风化→岩粉喂尘、冰川慢水库、冻土阻下渗、海冰压制蒸发 */
+const iFrostK=0.02,iCompactK=2e-6,iGMeltK=0.003,iSeaFreeze=-1.8;
+/* 风暴/闪电（C# Storm 镜像）：对流(暖×湿×厚云)充电-泄漏，过阈放电(IC/CG)，闪电驱动固氮+风暴凉意 */
+const sChargeK=0.02,sLeakK=0.01,sQthr=1.0,sReset=0.7,sCGfrac=0.27,sFixPerStrike=0.02,sCoolK=1.0;
+/* 海浪（C# Waves 镜像）：浪高向 风²×fetch 弛豫(成长+余涌)，海冰→0 */
+const wWaveK=0.06,wGrowth=0.02;
+/* 潜热(相变能)：蒸发致冷/凝结放热/融雪冰吸热(0°C平台)/结冰放热 —— 闭合 水↔温度 */
+const eLVap=2.0,eCondReturn=0.4,eLFus=0.3;
+/* 反照率(反射率)调制吸收的太阳：雪冰高反照→少吸→更冷→更多雪冰(冰反照率正反馈)；相对基准故裸地不回归 */
+const aAlbRef=0.20,aAlbSnow=0.70,aAlbWater=0.07,aAlbRock=0.22,aAlbSeaIce=0.55,aAlbK=0.3,aSnowCover=8;
+function albedoOf(r){ if(r.sea)return r.Tair<iSeaFreeze?aAlbSeaIce:aAlbWater; let f=Math.min(1,(r.Snow||0)/aSnowCover); if((r.glacier||0)>5)f=Math.max(f,0.85); return aAlbRock*(1-f)+aAlbSnow*f; }
+const absorbF=r=>Math.max(0.2,1-aAlbK*(albedoOf(r)-aAlbRef));
+const thinAir=r=>r.o2<19, badAir=r=>r.co2>2, breathable=r=>r.o2>17&&r.co2<3;
 const conc=(r,e)=>{const w=(r.Soil||0)+(r.Lake||0);return w>0.01?r.dis[e]/w:0;};
 const salinity=r=>conc(r,0)+conc(r,5), tds=r=>{let s=0;for(let e=0;e<NE;e++)s+=conc(r,e);return s;};  // 盐=Na+Cl
 const drinkable=r=>!r.salty&&!r.cave&&salinity(r)<0.3&&tds(r)<0.8;
 const hasCrust=r=>r.dep&&r.dep.some(v=>v>0.3);
 const domMineral=r=>{let bi=1,bv=0;for(let e=1;e<NE;e++){if(e===5)continue;if(conc(r,e)>bv){bv=conc(r,e);bi=e;}}return bv>0.02?MN[bi]:'';};
+// 氧化还原自由能:还原剂(redu,喷口H2/H2S)与氧化剂(CO2/SO4)失衡=可用化学能(生命第一代谢的能源)
+const freeEnergy=r=>{ const ox=clamp((r.co2||0)/2,0,1.5)+clamp((r.dis[6]||0)/300,0,1); return clamp((r.redu||0),0,1)*clamp(ox/2,0,1); };
+// 前生命"摇篮"就绪度(0-1):双通道取max。喷口=水×暖×自由能×硫化物催化×养分;地表=水×温和×闪电能×干湿×黏土×养分。生命本身留给生命层
+function cradleIndex(r){ if(r.cave) return 0;
+  const liquid=(r.Tair>0&&r.Tair<70&&(r.sea||(r.Lake||0)>0.5||(r.Soil||0)>2))?1:0; if(!liquid) return 0;
+  const nut=clamp((r.co2||0)/1,0,1)*clamp((r.dis[18]||0)/2,0,1)*clamp((r.dis[19]||0)/0.2,0,1)*clamp(((r.dis[16]||0)+(r.dis[6]||0))/4,0,1), nutC=Math.cbrt(Math.max(nut,1e-6));
+  const sulf=clamp(((r.dep[16]||0)+(r.dep[9]||0)+(r.dep[28]||0))/2,0,1);
+  const ventPath=clamp(0.3+0.7*Math.min(1,r.Tair/40),0,1)*freeEnergy(r)*sulf*nutC;   // 喷口通道
+  const clay=(r.lith==='黏土')?1:clamp((r.dis[25]||0)/0.5,0,0.6);
+  const light=clamp((r.charge||0)/0.5,0,1), warmth=clamp(r.Tair/25,0,1)*clamp((70-r.Tair)/40,0,1);
+  const wetdry=clamp((r.sea?0.6:0)+(r.lakeEvap||0),0,1);
+  const surfPath=warmth*light*wetdry*clay*nutC;                                       // 地表通道(潮池/蒸发湖+闪电)
+  return Math.max(ventPath,surfPath); }
 /* ===== 地点（枢纽放射）===== */
-function mkLocs(){
-  const L=[
+let WORLDTYPE='continent';   // 世界类型:continent(大陆) / ocean(全海洋·水世界)
+const L_CONT=[
    {key:'coast',name:'海边',scene:'sea',  elev:0,  sky:1.0, soilCap:30,oro:0.8, lakeEvap:0.32,sea:true,salty:true,lith:'砂岩',  down:'',     mx:0.50,my:0.58},
    {key:'wetland',name:'湿地',scene:'marsh',elev:50,sky:1.0, soilCap:20,oro:0.9, lakeEvap:0.5, lith:'黏土',  down:'coast',  mx:0.72,my:0.80},
-   {key:'forest',name:'森林',scene:'forest',elev:300,sky:0.85,soilCap:60,oro:1.0,lakeEvap:0,  lith:'黏土',  down:'coast',  mx:0.30,my:0.40},
+   {key:'forest',name:'林地',scene:'forest',elev:300,sky:0.85,soilCap:60,oro:1.0,lakeEvap:0,  lith:'黏土',  down:'coast',  mx:0.30,my:0.40},
    {key:'foothill',name:'山脚',scene:'hills',elev:600,sky:1.0,soilCap:35,oro:1.0,lakeEvap:0,  lith:'玄武岩',down:'forest', mx:0.74,my:0.34},
    {key:'mountain',name:'山顶',scene:'peak', elev:1050,sky:1.05,soilCap:25,oro:1.15,lakeEvap:0,lith:'花岗岩',down:'foothill',mx:0.90,my:0.13},
    {key:'canyon',name:'峡谷',scene:'canyon',elev:500,sky:0.5, soilCap:30,oro:1.0, lakeEvap:0, lith:'石灰岩',down:'basin',  mx:0.13,my:0.36},
    {key:'basin',name:'盆地',scene:'basin', elev:150,sky:1.0, soilCap:15,oro:0.85,lakeEvap:0.45,lith:'蒸发岩',down:'',     mx:0.10,my:0.66},
    {key:'cave',name:'洞穴',scene:'cave',  cave:true,parent:'canyon',lith:'石灰岩',down:'',                                mx:0.22,my:0.14},
   ];
+const L_OCEAN=[   // 水世界:唯一陆地=热点火山岛(像夏威夷),其余皆海。无大陆性→温和低季节;碳汇靠海底风化
+   {key:'island',name:'火山岛',scene:'peak', elev:450,sky:1.05,soilCap:25,oro:1.1, lakeEvap:0,  lith:'玄武岩',down:'reef', mx:0.50,my:0.28},
+   {key:'reef',  name:'礁盘', scene:'sea',  elev:0,  sky:1.0, soilCap:15,oro:0.9, lakeEvap:0.42,sea:true,salty:true,lith:'玄武岩',down:'open', mx:0.64,my:0.48},
+   {key:'lagoon',name:'潟湖', scene:'marsh',elev:0,  sky:1.0, soilCap:15,oro:0.85,lakeEvap:0.45,sea:true,salty:true,lith:'砂岩',  down:'open', mx:0.34,my:0.54},
+   {key:'open',  name:'开阔洋',scene:'sea', elev:0,  sky:1.0, soilCap:30,oro:0.95,lakeEvap:0.5, sea:true,salty:true,lith:'玄武岩',down:'',     mx:0.50,my:0.78},
+   {key:'deep',  name:'深海', scene:'sea', elev:0,  sky:1.0, soilCap:30,oro:0.9, lakeEvap:0.35,sea:true,salty:true,lith:'玄武岩',down:'',     mx:0.82,my:0.66},
+  ];
+function mkLocs(){
+  const L=(WORLDTYPE==='ocean'?L_OCEAN:L_CONT).map(o=>({...o}));   // 拷贝,防污染常量原型
   for(const r of L){
     r.dis=new Array(NE).fill(0); r.dep=new Array(NE).fill(0); r.minIn=new Array(NE).fill(0);
+    r.veg=VEG[r.key]; r.vent=r.cave?0.0004:0.3; if(r.cave&&!r.elev) r.elev=500;
+    r.o2=o2base(r); r.co2=CO2B;
     if(r.cave){ r.Tair=10;r.Tg=10; continue; }
-    r.gbase=GF-LAPSE*r.elev; const init=r.sea?13:8-LAPSE*r.elev;
+    r.gbase=CLIMBASE-LAPSE*r.elev; const init=r.sea?13:8-LAPSE*r.elev;
     r.Tair=init;r.Tg=init;r.Soil=Math.min(r.soilCap,40);r.V=12;r.C=20;r.Snow=0;r.Lake=r.sea?5000:0;r.storm=0;r.inflow=0;r.runoff=0;r.flow=0;
-    if(r.sea) r.dis=[3000,110,360,110,0.5,5390,750,30,1,0.1,20,0.5];   // 海水谱(Na/Cl主导·富碘)
+    r.dustLoose=r.sea?0:20;r.dustAir=0;r.skyDim=0;r.glacier=0;r.charge=0;r.lightning=0;r.wave=0;r.sediment=0;r.radon=0;   // 风蚀+冰川+雷暴+海浪+沉积+氡
+    r.soilCap0=r.soilCap;r.soilDepth=1.0;r.GW=r.sea?0:120;   // 土壤发育(土深=1基准)+地下水含水层(初始半满)
+    r.redu=0; r.hvent=({deep:1.0,reef:0.4,lagoon:0.2,open:0.1,coast:0.4})[r.key]||0;   // 还原剂(H2/H2S)+海底热液喷口基值(深海最强;近陆火山的海边次之)
+    r.org=0; r.prot=0;   // 史前有机化学:有机单体(氨基酸)+多肽/蛋白质(生命之前的化学演化)
+    r.repl=0; r.rTopt=0; r.rAuto=0;   // 自我复制分子(第一缕生命):自催化复制 + 遗传性状(耐温最适rTopt, 自养度rAuto=异养0↔化能自养1)
+    if(r.sea) r.dis=SEAREF.slice();   // 海水谱(Na/Cl主导·富碘·U/Mo/Ni);也是海洋埋藏的本底参照
   }
   return L;
 }
-const ROUTES=[['coast','forest',90],['coast','wetland',60],['coast','foothill',120],['forest','canyon',90],['canyon','basin',60],['canyon','cave',30],['foothill','mountain',150]];
-const DIFF=[['coast','forest'],['coast','wetland'],['coast','foothill'],['forest','canyon'],['canyon','basin'],['foothill','mountain']];
+const ROUTES_CONT=[['coast','forest',90],['coast','wetland',60],['coast','foothill',120],['forest','canyon',90],['canyon','basin',60],['canyon','cave',30],['foothill','mountain',150]];
+const DIFF_CONT=[['coast','forest'],['coast','wetland'],['coast','foothill'],['forest','canyon'],['canyon','basin'],['foothill','mountain']];
+const ROUTES_OCEAN=[['island','reef',120],['island','lagoon',150],['reef','open',90],['lagoon','open',90],['open','deep',120]];
+const DIFF_OCEAN=[['island','reef'],['island','lagoon'],['reef','open'],['lagoon','open'],['open','deep'],['reef','deep']];
+let ROUTES=ROUTES_CONT, DIFF=DIFF_CONT;
 let locs=mkLocs(), byk={}; for(const r of locs) byk[r.key]=r;
 const order=()=>[...locs].filter(r=>!r.cave).sort((a,b)=>b.elev-a.elev);
 let player='coast';
+function setupWorld(){   // 按世界类型装配:地点集+路线+扩散+火山口+起点
+  ROUTES=(WORLDTYPE==='ocean'?ROUTES_OCEAN:ROUTES_CONT); DIFF=(WORLDTYPE==='ocean'?DIFF_OCEAN:DIFF_CONT);
+  locs=mkLocs(); byk={}; for(const r of locs)byk[r.key]=r;
+  VOLC=(order().find(r=>!r.sea)||order()[0]).key;   // 火山口=最高陆地(水世界→火山岛)
+  player=(WORLDTYPE==='ocean'?'island':'coast'); }
 function neighbors(k){ const out=[]; for(const [a,b,mn] of ROUTES){ if(a===k)out.push([b,mn]); else if(b===k)out.push([a,mn]); } return out; }
 /* ===== 时间 ===== */
 let paused=false, speed=60, acc=0;
@@ -136,29 +368,93 @@ function realMin(){const d=new Date();return d.getHours()*60+d.getMinutes()+d.ge
 let total=((realDOY()%YEAR+YEAR)%YEAR)*1440+Math.round(realMin());
 function curMin(){return((total%1440)+1440)%1440;} function curDOY(){return((Math.floor(total/1440)%YEAR)+YEAR)%YEAR;}
 function stepMinute(){
-  total++; const m=curMin(),d=curDOY(),slo=sunF(m,d);
+  total++; if(geoLive&&total%1440===0)geoYear(); const m=curMin(),d=curDOY(),slo=sunF(m,d);
+  if(total%1440===0){ let ice=0; for(const r of locs) ice+=(r.glacier||0)+(r.Snow||0);   // 冰川性海平面:全球冰(冰川+雪)↔海洋体积。冰多→海平面降→海岸退(守恒:水在冰↔洋)
+    if(refIce<0) refIce=ice; seaLevel=-(ice-refIce)*0.18; }
+  if(_ringDay!==d){ _ringDay=d; const lr=LAT*PI/180,dr=decl(d); curRingSh=ringShadow(lr,dr); curRingShine=ringShine(lr,dr); }  // 环影/环光每天算一次(24步循环,只随赤纬变)
+  eclSolar=eclipseCover(m,d,false); eclLunar=eclipseCover(m,d,true);   // 日/月食每步各算一次→下游全复用(光照/月亮/HUD/潜热)
+  const rsh=curRingSh, secl=eclSolar;          // 环影削日照 / 日食遮日(均用缓存)
   for(const r of order()){
-    const sl=slo*r.sky;
-    if(r.sea){ const st=seaTemp(d); r.Tg=st; r.Tair+=0.02*(st-r.Tair); }
-    else { r.Tg+=SG*slo*csun(r.C)-SL*(r.Tg-r.gbase); r.Tair+=AG*sl*csun(r.C)-AL*ccool(r.C)*(r.Tair-r.Tg); }
-    const dry=Math.max(0,1-r.V/VaporMax);
-    const Es=Math.min(EvapK*sl*dry,r.Soil), El=Math.min(EvapK*sl*dry*r.lakeEvap,r.Lake);
+    const dimR=Math.min(0.9,(geoSkyDim||0)+wDustDimK*(r.dustAir||0)); r.skyDim=dimR;   // 火山灰+尘 合成遮日
+    const sloR=slo*(1-dimR)*(1-rsh)*(1-secl)*(1-cCloudAlb*r.C/100)*absorbF(r)*pInsol*milankFlux, sl=sloR*r.sky;   // 吸收的太阳:去云灰幕×环影×日食×云反照×反照率×日照×米兰科维奇
+    if(r.sea){ const st=seaTemp(d); r.Tg=st; r.Tair+=0.02*(st-r.Tair);
+      if(r.hvent){ const vent=r.hvent*coreActivity; r.Tg+=ventHeatK*vent; r.Tair+=0.3*ventHeatK*vent*0.02;   // 喷口暖区(深海冷水里的暖点)
+        r.redu=clamp((r.redu||0)+ventReduK*vent-reduDecayK*(r.redu||0),0,2);                                  // 还原流体H2/H2S(蛇纹石化)
+        r.dis[4]+=ventMetalK*vent; r.dis[16]+=ventMetalK*vent; r.dep[16]+=ventSulfK*vent; r.dep[9]+=0.3*ventSulfK*vent; } }   // 喷口金属+硫化物烟囱(也喂金属循环)
+    else r.redu=Math.max(0,(r.redu||0)-reduDecayK*(r.redu||0));   // 非喷口处还原剂被氧化剂耗散
+    else { r.Tg+=SG*sloR*csun(r.C)-SL*(r.Tg-(r.gbase+cGhouse*(globalCO2-CO2ref)+cVapGH*clamp(r.V-Vref,-Vref,40))); r.Tair+=AG*sl*csun(r.C)-AL*ccool(r.C)*(r.Tair-r.Tg); }  // 慢层含CO₂+水汽温室偏差
+    const VsatT=VaporMax*Math.pow(2,(r.Tair-15)/cVsatT);          // 饱和水汽随温(C-C):暖→容量↑→水汽多→温室强(水汽反馈)
+    const dry=Math.max(0,1-r.V/VsatT);
+    r.wind=windOf(r); const wf=1+wKEvap*r.wind;                       // 风加速蒸发
+    if(r.sea){ const wt=(r.Tair<iSeaFreeze)?0:wWaveK*r.wind*r.wind; r.wave=(r.wave||0)+wGrowth*(wt-(r.wave||0)); }  // 海浪:风²弛豫(成长/余涌),结冰镜面
+    const Es=Math.min(EvapK*sl*dry*wf,r.Soil), El=(r.sea&&r.Tair<iSeaFreeze)?0:Math.min(EvapK*sl*dry*r.lakeEvap*wf,r.Lake);  // 海冰封盖→无蒸发
     const F=CondK*r.oro*r.V*(0.3+0.7*sl), D=DispK*r.C;
     let st=r.storm>0.5; if(!st&&r.C>RainHi)st=true; const Rr=st?RainK*r.C:0; if(st&&(r.C-Rr)<RainLo)st=false;
     const toSnow=(Rr>0&&r.Tair<=SnowTemp)?Rr:0, rainIn=Rr-toSnow;
     const melt=Math.min(r.Snow,MeltK*Math.max(0,r.Tair-MeltTemp));
     r.Snow=clamp(r.Snow+toSnow-melt,0,SnowCap);
+    const comp=iCompactK*r.Snow; r.Snow-=comp; r.glacier=(r.glacier||0)+comp;        // 雪压实成冰
+    const gm=Math.min(r.glacier,iGMeltK*Math.max(0,r.Tair)); r.glacier-=gm;           // 度日融冰→径流
+    r.Tair+= -eLVap*(Es+El) + eCondReturn*eLVap*F - eLFus*(melt+gm) + eLFus*toSnow;   // 潜热:蒸发致冷/凝结放热/融化吸热(0°C平台)/结冰放热
     r.V=clamp(r.V+Es+El-F+D,0,50); r.C=clamp(r.C+F-D-Rr,0,100); r.Lake=Math.max(0,r.Lake-El); r.storm=st?1:0;
-    const inW=rainIn+melt+r.inflow, soilAE=r.Soil-Es, space=Math.max(0,r.soilCap-soilAE), infil=Math.min(space,inW);
-    r.Soil=soilAE+infil; r.runoff=inW-infil; r.inflow=0;
+    // 雷暴放电(电荷张弛)：对流充电→过阈放电→闪电；冬冷/无云→0；闪电驱动固氮+风暴凉意
+    { const rh=Math.min(1,r.V/VaporMax), conv=(r.C/100)*Math.max(0,r.Tair/25)*(0.5+0.5*rh);
+      r.charge=(r.charge||0)+sChargeK*conv-sLeakK*(r.charge||0); let strk=0;
+      if(r.charge>=sQthr){ strk=r.charge-sQthr*sReset; r.charge=sQthr*sReset; } r.lightning=strk;
+      if(strk>0) r.Tair-=sCoolK*strk; }
+    const inW=rainIn+melt+r.inflow, soilAE=r.Soil-Es, space=Math.max(0,r.soilCap-soilAE)*(r.Tg<0?0.1:1), infil=Math.min(space,inW);  // 冻土阻下渗
+    r.Soil=soilAE+infil; let gwBase=0;
+    if(!r.sea){ const sat=r.soilCap?r.Soil/r.soilCap:0, rech=(r.Tg<0)?0:Math.min(gwRechK*r.Soil*sat,gwCap-(r.GW||0)); gwBase=gwBaseK*(r.GW||0); r.Soil-=rech; r.GW=(r.GW||0)+rech-gwBase; }   // 含水层:土壤近饱和→深渗补给;慢基流→径流(旱季泉流)。守恒(土壤剥蚀=地质级慢量→移到下面chemStep每小时跑)
+    r.runoff=inW-infil+gm+gwBase; r.inflow=0;
+    // 风蚀扬尘 + 冻融风化：松尘↔悬浮尘（守恒，除风化/冻融慢源）
+    { const wnd=r.wind, moist=r.soilCap?r.Soil/r.soilCap:0, dryD=Math.max(0,1-moist), below=!r.sea&&(r.dustLoose||0)<dLooseCap;
+      const sup=below?dSupplyK:0, frost=below?iFrostK*moist*Math.exp(-((r.Tair/4)**2)):0;   // 冻融岩粉(0°C附近+有水最强)
+      const defl=dDeflK*Math.max(0,wnd-dWindThr)*(r.dustLoose||0)*dryD, settle=dSettleK*(r.dustAir||0)/(1+0.2*wnd);
+      r.dustLoose=(r.dustLoose||0)+sup+frost-defl+settle; r.dustAir=(r.dustAir||0)+defl-settle; }
   }
   const cave=byk.cave, par=byk[cave.parent]; cave.Tg=par.Tg; cave.Tair+=0.02*(par.Tg-cave.Tair);
-  // 矿物：风化(岩石→溶解) + 消化上游来矿
+  // 大气成分(所有地点含洞穴)【无生命】：仅通风趋向无机基线 + 雷暴闪电固氮→硝
   for(const r of locs){
-    if(!r.cave&&!r.sea){ const lt=LITHO[r.lith], wet=r.soilCap?r.Soil/r.soilCap:0, tf=Math.max(0,Math.min(1.5,(r.Tair+5)/25));
-      for(let e=0;e<NE;e++) r.dis[e]+=WK*lt[0]*lt[1][e]*wet*tf; }
-    for(let e=0;e<NE;e++){ r.dis[e]+=r.minIn[e]; r.minIn[e]=0; }
+    const ob=o2base(r);                                  // 火山CO₂脉冲由 geoErupt 另注入
+    r.o2=clamp(r.o2+r.vent*(ob-r.o2),0,25);
+    r.co2=clamp(r.co2+r.vent*(CO2B-r.co2),0,100);
+    const uHere=(r.dis[23]||0)+(r.dep[23]||0); r.radon=Math.max(0,(r.radon||0)+0.0005*uHere-(r.radon||0)*(0.02+r.vent));  // 氡:U衰变产,低通风(洞穴)积聚,自身快衰变
+    if(!r.cave&&!r.sea){ const tf=Math.max(0,Math.min(1.5,(r.Tair+5)/25)); r.dis[18]+=sFixPerStrike*(r.lightning||0)*tf; }  // 固氮按实际闪电脉冲
   }
+  // 矿物：风化(岩石→溶解,慢变量→每小时×60跑一次省算) + 消化上游来矿(每分钟,随路由)
+  const CHEM=60, chemStep=(total%CHEM===0);
+  for(const r of locs){
+    if(chemStep && !r.cave&&!r.sea){ const lt=LITHO[r.lith], wet=r.soilCap?r.Soil/r.soilCap:0, tf=Math.max(0,Math.min(1.5,(r.Tair+5)/25));
+      const cf=Math.max(0.1,globalCO2/CO2ref), act=lt[0]*wet*tf*cf*CHEM;      // 碳酸驱动风化活度(×CHEM守恒)
+      for(let e=0;e<NE;e++) r.dis[e]+=WK*lt[1][e]*act*(HEAVY.has(e)?PLANET.metallicity:1);   // 重元素丰度∝金属丰度(宇宙演化代)
+      const leach=tf*wet; for(const [i] of LATER) r.dep[i]+=cLaterK*lt[1][i]*act*leach;   // 红土残积:湿热淋走可溶组分→不溶金属氧化物(Fe/Al/Mn/Ti/Ni/Cr)残留富集(铝土/红土镍/铁帽,湿热高地专属)
+      globalCO2=Math.max(0.02,globalCO2-cWeatherCO2K*act);                    // 风化吸CO₂(碳汇)
+      r.elev=Math.max(0,r.elev-cChemErodeK*act); r.gbase=CLIMBASE-LAPSE*r.elev;
+      r.soilDepth=clamp((r.soilDepth||1)+pedWeatherK*act-pedErodeK*(r.runoff||0)*clamp(r.elev/700,0.2,2)*CHEM,0.05,2.5);  // 土壤发育:风化造土(化学+物理) - 径流×坡度剥土(慢量→每小时跑,×CHEM补频率)
+      r.soilCap=r.soilCap0*(0.6+0.4*clamp(r.soilDepth,0,2)); }                // 土深调制持水容量(±,土深=1→不变,保标定)
+    else if(chemStep && r.sea){ globalCO2=Math.max(0.02,globalCO2-cSeafloorK*(globalCO2/CO2ref)*CHEM);  // 海底风化:碳酸化海底玄武岩→无陆也吸碳(水世界的碳汇)
+      for(let e=0;e<NE;e++){ const exc=r.dis[e]-SEAREF[e]; if(exc>0){ const b=seaBuryK*exc; r.dis[e]-=b; subPool[e]+=b; } } }  // 海洋沉积埋藏:超出海水本底的溶解质→自生矿物入海底→俯冲池(堵洋盆死胡同,洋成分稳态)
+    if(chemStep && !r.cave){    // 史前有机化学(生命之前):合成→缩合聚合↔水解→缓慢降解。蛋白质在 能量(闪电/喷口ΔG)+催化(黏土/矿物表面)+浓缩(干涸/吸附)+无氧 处累积(cradle两路)
+      const water=(r.Soil||0)+(r.Lake||0)+(r.sea?50:0), redox=clamp(r.o2/5,0,1);
+      const energy=0.6*clamp((r.charge||0)/0.5,0,1)+freeEnergy(r), feed=clamp((r.co2||0)/2,0,1)*clamp((r.dis[18]||0)/3,0,1)*(1-redox);  // 闪电+喷口ΔG;原料CO2×固氮N×还原环境
+      const cat=(r.lith==='黏土'?0.7:0)+clamp(((r.dep[16]||0)+(r.dep[28]||0))/2,0,0.8), conc=clamp((1-water/((r.soilCap||30)+20))+0.8*cat,0,1.5);  // 黏土+矿物表面催化;干涸/吸附浓缩
+      const syn=oSynK*energy*feed*CHEM, poly=oPolyK*(r.org||0)*(r.org||0)*conc*cat*CHEM, hyd=oHydK*(r.prot||0)*clamp(water/40,0,1)*CHEM, dec=oDecK*((r.org||0)+(r.prot||0))*(1+5*redox)*CHEM;
+      r.org=Math.max(0,(r.org||0)+syn+hyd-poly-0.5*dec); r.prot=Math.max(0,(r.prot||0)+poly-hyd-0.5*dec);
+      r.co2=clamp(r.co2-oCfrac*syn+oCfrac*dec,0,100);   // 守恒:合成扣无机C,降解还
+      // 自我复制分子(第一缕生命):吃有机汤(org+prot)自催化复制;耐温最适rTopt确定性追当地温(环境选择);点燃=汤过阈
+      const food=(r.org||0)+(r.prot||0), fit=Math.exp(-Math.pow((r.Tair-(r.rTopt||r.Tair))/rWidth,2));
+      if((r.repl||0)<rSeed && food>rIgnite && fit>0.3){ r.rTopt=r.Tair; r.repl=rSeed; r.rAuto=0; }   // 确定性起源:汤够浓→点燃(初代异养,最适温=当地温)
+      if((r.repl||0)>0){
+        const hetCap=food/(food+rKhalf), co2a=clamp((r.co2||0)/2,0,1), a=clamp(r.rAuto||0,0,1);
+        const wHet=rBirthK*hetCap*fit, wAuto=rBirthAutoK*clamp(r.redu||0,0,1)*co2a*fit;   // 异养(吃汤)/自养(还原剂H2+CO2)各自人均适应度
+        const bHet=wHet*r.repl*(1-a), bAuto=wAuto*r.repl*a, deaths=rDeathK*r.repl*(1+3*redox);
+        const take=Math.min(bHet/rYield,food), fr=food>0?take/food:0; r.org=Math.max(0,r.org*(1-fr)); r.prot=Math.max(0,r.prot*(1-fr));  // 异养吃有机汤
+        r.co2=Math.max(0.05,(r.co2||0)-cFixK*bAuto); r.redu=Math.max(0,(r.redu||0)-rReduK*bAuto);   // 自养固CO2(生物碳泵)+耗还原剂
+        r.repl=Math.max(0,r.repl+bHet+bAuto-deaths); r.org+=deaths;          // 死亡→有机碎屑归还(守恒)
+        if(r.repl>1e-3){ r.rTopt=(r.rTopt||r.Tair)+rAdaptK*(r.Tair-(r.rTopt||r.Tair)); r.rAuto=clamp(a+rAutoAdaptK*(wAuto-wHet),0,1); } } }   // 选择:最适温追当地温 + 代谢型爬向更优策略
+    for(let e=0;e<NE;e++){ r.dis[e]+=r.minIn[e]; r.minIn[e]=0; }              // 来矿每分钟(与路由同步)
+  }
+  globalCO2+=cVolcOutgas;   // 碳源：火山本底排气(每分钟，与每小时×60的风化汇平均匹配，恒温器闭环)
   // 径流路由（水 + 按浓度携带的溶解矿物，1分钟/跳）
   for(const r of order()){ if(r.runoff>0){ r.flow=r.runoff;
       const water=(r.Soil||0)+(r.Lake||0), frac=water>1e-6?r.runoff/water:0;
@@ -169,13 +465,14 @@ function stepMinute(){
   for(const r of locs){ if(r.cave)continue; const w=Math.max((r.Soil||0)+(r.Lake||0),0.01);
     for(let e=0;e<NE;e++){ const cap=SOL[e]*w;
       if(r.dis[e]>cap){ r.dep[e]+=r.dis[e]-cap; r.dis[e]=cap; }
-      else if(r.dep[e]>0){ const x=Math.min(r.dep[e],cap-r.dis[e]); r.dep[e]-=x; r.dis[e]+=x; } } }
-  for(const [a,b] of DIFF){ const f=VDIFF*(byk[a].V-byk[b].V); byk[a].V-=f; byk[b].V+=f; }
+      else if(r.dep[e]>0 && !LOCKED.has(e)){ const x=Math.min(r.dep[e],cap-r.dis[e]); r.dep[e]-=x; r.dis[e]+=x; } } }   // 盐遇水回溶;金属矿物(LOCKED)稳定不回溶
+  for(const [a,b] of DIFF){ const f=VDIFF*(byk[a].V-byk[b].V); byk[a].V-=f; byk[b].V+=f;
+    const fd=0.02*((byk[a].dustAir||0)-(byk[b].dustAir||0)); byk[a].dustAir-=fd; byk[b].dustAir+=fd; }   // 悬浮尘顺风搬运→下风沉积
 }
-function spinUp(){ locs=mkLocs(); byk={}; for(const r of locs)byk[r.key]=r;
+function spinUp(){ updClimBase(); setupWorld();
   const target=total,N=2*YEAR*1440; total=target-N; for(let i=0;i<N;i++) stepMinute(); }
-function resetAll(){ total=((realDOY()%YEAR+YEAR)%YEAR)*1440+Math.round(realMin()); acc=0; spinUp(); player='coast'; }
-spinUp();
+function resetAll(){ total=((realDOY()%YEAR+YEAR)%YEAR)*1440+Math.round(realMin()); acc=0; magmaP=tecStress=aerosol=cumLava=geoSkyDim=geoYearN=eruptFx=0; globalCO2=CO2ref; geoLive=false; lastGeo='—'; spinUp(); geoLive=true; }
+spinUp(); geoLive=true;   // 地质只在 spin-up 之后推进（不预演化起始世界）
 /* ===== 旅行 ===== */
 let traveling=null; // {to, left, total}
 function travelTo(k){ const nb=neighbors(player).find(n=>n[0]===k); if(!nb||traveling)return; traveling={to:k,left:nb[1],tot:nb[1]}; }
@@ -188,19 +485,39 @@ const mc=document.getElementById('mini'),mx=mc.getContext('2d');
 function fit(c){const r=c.getBoundingClientRect(),dp=Math.min(devicePixelRatio||1,2);c.width=r.width*dp;c.height=r.height*dp;c.getContext('2d').setTransform(dp,0,0,dp,0,0);return{w:r.width,h:r.height};}
 let S=fit(sc),M=fit(mc); addEventListener('resize',()=>{S=fit(sc);M=fit(mc);});
 const mix=(a,b,t)=>a.map((v,i)=>Math.round(v+(b[i]-v)*t)),rgb=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
-let frame=0;
+let frame=0, boltFx=0, boltSeed=0;
 function skyAndCelestial(W,H,r,m,d,horizon){
-  const sun=sunF(m,d),moon=moonF(m,d),local=r.cave?0:clamp((LightPeak*sun+MoonPeak*moon)*(r.sky||1),0,100),L=local/100;
+  const secl=eclSolar;   // 日食遮日比例(缓存)→白昼骤暗(深食星辰显现)
+  const sun=sunF(m,d)*(1-secl),moon=moonLight(m,d)+curRingShine,local=r.cave?0:clamp((LightPeak*sun+moon)*(r.sky||1),0,100),L=local/100;  // moon 含各卫星亮度求和 + 环光反照(缓存)
   const nt=[10,14,34],dtp=[78,150,222],nb=[26,30,56],db=[150,196,236];
   const g=sx.createLinearGradient(0,0,0,horizon); g.addColorStop(0,rgb(mix(nt,dtp,L))); g.addColorStop(1,rgb(mix(nb,db,L)));
   sx.fillStyle=r.cave?'#0a0d13':g; sx.fillRect(0,0,W,horizon);
   if(r.cave) return L;
   const starA=clamp((22-local)/22,0,1);
   if(starA>0)for(let i=0;i<60;i++){const x=(i*97)%W,y=(i*53)%(horizon-10);sx.fillStyle=`rgba(255,255,255,${starA*(0.5+0.5*Math.sin(i+frame*0.05))*0.9})`;sx.fillRect(x,y,2,2);}
-  const sr=sunriseOf(d),ss=sunsetOf(d),df=(m-sr)/(ss-sr);
-  if(df>=0&&df<=1){const x=df*W,y=horizon-Math.sin(df*PI)*(horizon-26);sx.shadowColor='#ffcf5a';sx.shadowBlur=26;sx.fillStyle='#ffd76a';sx.beginPath();sx.arc(x,y,15,0,7);sx.fill();sx.shadowBlur=0;}
-  else if(moon>0.01){const il=(1-Math.cos(2*PI*moonPhase()))/2,nl=1440-(ss-sr),nm=(m>=ss)?m-ss:m+(1440-ss),nf=nl>0?nm/nl:0,x=nf*W,y=horizon-Math.sin(nf*PI)*(horizon-40);
-    sx.globalAlpha=.3+.7*il;sx.shadowColor='#9fb8ff';sx.shadowBlur=12;sx.fillStyle='#eef2fb';sx.beginPath();sx.arc(x,y,11,0,7);sx.fill();sx.shadowBlur=0;sx.globalAlpha=1;}
+  // 行星环弧:横跨天空的拱(赤道面)。被照亮程度∝|sinδ|;高纬→更贴地平(扁);夜里对比更强;中间留卡西尼暗缝
+  if(RING){ const lit=clamp(Math.abs(Math.sin(decl(d)))*1.4,0.12,1), apex=horizon*(0.18+0.5*Math.abs(LAT)/90), aR=clamp((0.30+0.55*lit)*(0.55+0.45*(1-L)),0,0.85);
+    sx.save(); sx.lineCap='round';
+    for(let b=0;b<5;b++){ const yy=apex+b*4, op=aR*(b===2?0.3:0.7);
+      sx.strokeStyle=`rgba(${222-b*8},${212-b*6},${188-b*4},${op})`; sx.lineWidth=3;
+      sx.beginPath(); sx.moveTo(0,horizon-2); sx.quadraticCurveTo(W/2,yy,W,horizon-2); sx.stroke(); }
+    sx.restore(); }
+  // 恒星：逐颗画(各自高度弧线、位置、视大小)——双星会在天上错开、各自升落
+  for(const su of SUNS){ const e=sunElev(su,m,d); if(e<=0.02)continue;
+    const x=(((total/su.dayLen)+su.phase)%1+1)%1*W, y=horizon-e*(horizon-26), rad=10+8*su.flux;
+    sx.shadowColor='#ffcf5a';sx.shadowBlur=26*(1-secl);sx.fillStyle='#ffd76a';sx.beginPath();sx.arc(x,y,rad,0,7);sx.fill();sx.shadowBlur=0;
+    if(secl>0.02){ const off=rad*(1-secl); sx.fillStyle='#05070d'; sx.beginPath(); sx.arc(x-off,y-off*0.6,rad*1.05,0,7); sx.fill(); } }   // 月掩日:暗盘咬入,全食时正中全黑
+  // 卫星：逐颗画(够暗时可见，各自相位/位置/大小)——不同周期会错开
+  if(starA>0.1) for(const o of MOONS){
+    const f=((total/1440/o.period)%1+1)%1, il=(1-Math.cos(2*PI*f))/2, phi=LAT*PI/180, de=decl(d+f*YEAR), H=2*PI*(m/1440)-PI-2*PI*f, e=Math.sin(phi)*Math.sin(de)+Math.cos(phi)*Math.cos(de)*Math.cos(H);
+    if(e<=0.02)continue;
+    const x=((((m/1440)-f)%1)+1)%1*W, y=horizon-e*(horizon-40), rad=Math.max(4,11*Math.cbrt(o.mass/7.342e22)/(o.d/3.844e8));
+    const lec=eclLunar;   // 月食:满月入地影→变暗泛红(血月)(缓存)
+    sx.globalAlpha=.3+.7*il;sx.shadowColor=lec>0.05?'#a83a28':'#9fb8ff';sx.shadowBlur=10;sx.fillStyle=lec>0.05?rgb(mix([238,242,251],[150,60,44],Math.min(1,lec)))+'':'#eef2fb';sx.beginPath();sx.arc(x,y,rad,0,7);sx.fill();sx.shadowBlur=0;sx.globalAlpha=1; }
+  // 极光：高磁纬(>50°)、够暗、且有磁场channel带电粒子 → 极光帘幕
+  const au=auroraStrength(); if(au>0.05 && starA>0.3){
+    for(let i=0;i<W;i+=6){ const h=horizon*0.5*(0.4+0.6*Math.abs(Math.sin(i*0.02+frame*0.03)));
+      sx.fillStyle=`rgba(${80-i%40},${200},${120+i%60},${0.12*au*starA})`; sx.fillRect(i,horizon*0.1,6,h); } }
   return L;
 }
 function precip(W,horizon,r){ if(!r.storm)return; const cold=r.Tair<=SnowTemp;
@@ -212,17 +529,26 @@ function drawScene(){
   const L=skyAndCelestial(W,H,r,m,d,horizon);
   const snowy=(r.Snow||0)>3, wet=(r.Soil||0)/(r.soilCap||100);
   if(r.scene==='sea'){
-    const sand=mix([60,66,86],[222,205,150],L); sx.fillStyle=rgb(mix([20,60,110],[40,120,180],L)); sx.fillRect(0,horizon-1,W,H*0.20);
-    for(let i=0;i<7;i++){const y=horizon+i*9+(frame*0.4%9);sx.strokeStyle=`rgba(255,255,255,${0.06+0.05*Math.sin(i+frame*0.04)})`;sx.lineWidth=2;sx.beginPath();for(let x=0;x<=W;x+=12)sx.lineTo(x,y+2*Math.sin(x*0.05+frame*0.05+i));sx.stroke();}
-    sx.fillStyle=rgb(sand); sx.beginPath(); sx.moveTo(0,H*0.86); sx.quadraticCurveTo(W*0.5,H*0.80,W,H*0.86); sx.lineTo(W,H); sx.lineTo(0,H); sx.fill();
+    const ex=tideExposed();                                  // 潮间带露出比例(低潮↑)
+    const sand=mix([60,66,86],[222,205,150],L);
+    const wl=horizon+H*0.14+(0.5-ex)*H*0.16;                 // 潮水线：低潮上移露滩、高潮下压淹滩
+    sx.fillStyle=rgb(mix([20,60,110],[40,120,180],L)); sx.fillRect(0,horizon-1,W,Math.max(2,wl-horizon));
+    const Hs=r.wave||0, amp=1+1.5*Math.min(5,Hs), nL=Math.min(11,4+Math.round(Hs));   // 浪高→振幅/浪纹数
+    for(let i=0;i<nL;i++){const y=horizon+i*7+(frame*(0.4+0.15*Hs)%7);if(y>wl-2)break;sx.strokeStyle=`rgba(255,255,255,${0.05+0.04*Math.sin(i+frame*0.04)+0.03*Math.min(3,Hs)})`;sx.lineWidth=2;sx.beginPath();for(let x=0;x<=W;x+=10)sx.lineTo(x,y+amp*Math.sin(x*0.05+frame*0.05+i));sx.stroke();}
+    if(Hs>1.5){ sx.fillStyle=`rgba(255,255,255,${Math.min(0.6,0.12*Hs)})`; for(let i=0;i<W;i+=24){const fx=(i+frame*2)%W; sx.beginPath();sx.ellipse(fx,wl+2*Math.sin(fx*0.1+frame*0.1),6+Hs,2.5,0,0,7);sx.fill();} }  // 拍岸浪花
+    sx.fillStyle=rgb(mix(sand,[110,120,115],0.55)); sx.fillRect(0,wl,W,H-wl);        // 潮间带湿滩
+    sx.fillStyle=`rgba(150,195,215,${0.22*ex})`; sx.fillRect(0,wl,W,(H-wl)*0.5);     // 湿润反光
+    if(ex>0.4) for(let i=0;i<4;i++){sx.fillStyle='rgba(40,95,125,.5)';sx.beginPath();sx.ellipse(W*(0.15+0.22*i),wl+(H-wl)*0.45,20*ex,5*ex,0,0,7);sx.fill();}  // 低潮潮池
+    sx.fillStyle=rgb(sand); sx.beginPath(); sx.moveTo(0,H*0.90); sx.quadraticCurveTo(W*0.5,H*0.85,W,H*0.90); sx.lineTo(W,H); sx.lineTo(0,H); sx.fill();  // 干沙
+    if(r.Tair<iSeaFreeze){ sx.fillStyle='rgba(226,236,246,0.88)';sx.fillRect(0,horizon-1,W,Math.max(2,wl-horizon));   // 海冰封盖
+      sx.strokeStyle='rgba(150,175,200,.5)';sx.lineWidth=1;for(let i=0;i<6;i++){const y=horizon+i*((wl-horizon)/6);sx.beginPath();sx.moveTo(0,y);sx.lineTo(W,y+3*Math.sin(i));sx.stroke();} }
   } else if(r.scene==='marsh'){
-    sx.fillStyle=rgb(mix([18,24,30],[70,90,75],L*0.7)); sx.fillRect(0,horizon-1,W,H);
-    for(let i=0;i<5;i++){sx.fillStyle=`rgba(60,110,140,${0.3+0.1*i})`;const y=horizon+15+i*14;sx.beginPath();sx.ellipse(W*(0.2+0.18*i),y,40,7,0,0,7);sx.fill();}
-    sx.strokeStyle=rgb(mix([40,60,40],[90,130,70],L));sx.lineWidth=2;for(let i=0;i<40;i++){const x=(i*53)%W,y=horizon+10+(i*37)%(H*0.3);sx.beginPath();sx.moveTo(x,y);sx.lineTo(x+2*Math.sin(frame*0.05+i),y-16);sx.stroke();}
+    sx.fillStyle=rgb(mix([18,22,26],[74,68,58],L*0.7)); sx.fillRect(0,horizon-1,W,H);   // 泥滩(无植被)
+    for(let i=0;i<5;i++){sx.fillStyle=`rgba(60,110,140,${0.3+0.1*i})`;const y=horizon+15+i*14;sx.beginPath();sx.ellipse(W*(0.2+0.18*i),y,40,7,0,0,7);sx.fill();}  // 死水洼
     sx.fillStyle='rgba(180,190,200,0.06)';sx.fillRect(0,horizon-30,W,40);
   } else if(r.scene==='forest'){
-    sx.fillStyle=rgb(mix([16,26,18],[50,90,50],L)); sx.fillRect(0,horizon-1,W,H);
-    for(let i=0;i<16;i++){const x=(i*61+30)%W,h=40+((i*53)%50),y=horizon+8;sx.fillStyle=rgb(mix([10,20,12],[24,60,28],L));sx.beginPath();sx.moveTo(x,y-h);sx.lineTo(x-13,y+6);sx.lineTo(x+13,y+6);sx.closePath();sx.fill();sx.fillRect(x-2,y+4,4,10);}
+    sx.fillStyle=rgb(mix([22,22,20],[96,84,64],L)); sx.fillRect(0,horizon-1,W,H);        // 裸露黏土/岩(无植被)
+    for(let i=0;i<10;i++){const x=(i*71+20)%W,y=horizon+18+((i*43)%Math.max(1,(H-horizon-26))),rr=4+((i*5)%6);sx.fillStyle=rgb(mix([20,18,16],[70,62,50],L));sx.beginPath();sx.arc(x,y,rr,0,7);sx.fill();}  // 散石
   } else if(r.scene==='hills'){
     sx.fillStyle=rgb(mix([20,28,30],snowy?[210,216,226]:[70,96,66],snowy?0.8:L)); sx.beginPath();sx.moveTo(0,horizon);
     for(let x=0;x<=W;x+=24)sx.lineTo(x,horizon+10-20*Math.sin(x*0.012));sx.lineTo(W,H);sx.lineTo(0,H);sx.fill();
@@ -231,6 +557,13 @@ function drawScene(){
     sx.fillStyle=base;sx.beginPath();sx.moveTo(0,H);sx.lineTo(W*0.3,horizon-10);sx.lineTo(W*0.5,horizon-60);sx.lineTo(W*0.7,horizon-10);sx.lineTo(W,H);sx.fill();
     sx.fillStyle=`rgba(238,243,250,${snowy?0.95:0.4})`;sx.beginPath();sx.moveTo(W*0.5,horizon-60);sx.lineTo(W*0.40,horizon-6);sx.lineTo(W*0.60,horizon-6);sx.closePath();sx.fill();
     if(snowy){sx.fillStyle='rgba(235,240,248,.9)';sx.fillRect(0,horizon+30,W,H);}
+    if((r.glacier||0)>20){ const gi=Math.min(1,(r.glacier-20)/200);        // 冰川冰盖 + 下泄冰舌
+      sx.fillStyle=`rgba(200,226,246,${0.55+0.35*gi})`;sx.beginPath();sx.moveTo(W*0.5,horizon-60);sx.lineTo(W*0.36,horizon-2);sx.lineTo(W*0.64,horizon-2);sx.closePath();sx.fill();
+      sx.fillStyle=`rgba(176,212,240,${0.45+0.4*gi})`;sx.fillRect(W*0.45,horizon-4,W*0.10,30+50*gi); }
+    const mp=clamp(magmaP/(gStr+gOverK*r.elev),0,1);                       // 岩浆压力→山顶红光
+    if(mp>0.45){sx.fillStyle=`rgba(255,90,30,${0.30*(mp-0.45)})`;sx.beginPath();sx.arc(W*0.5,horizon-58,12+16*mp,0,7);sx.fill();}
+    if(eruptFx>0){ for(let i=0;i<5;i++){const yy=horizon-60-i*22,rad=14+i*10;sx.fillStyle=`rgba(70,62,58,${0.8-i*0.12})`;sx.beginPath();sx.arc(W*0.5+6*Math.sin(frame*0.08+i),yy,rad,0,7);sx.fill();}
+      sx.fillStyle='rgba(255,150,50,.9)';sx.beginPath();sx.arc(W*0.5,horizon-60,7+3*Math.sin(frame*0.3),0,7);sx.fill(); }  // 喷发灰柱+火光
   } else if(r.scene==='canyon'){
     sx.fillStyle='rgba(0,0,0,.28)';sx.fillRect(0,0,W,horizon);
     const wall=rgb(mix([30,24,22],[120,84,64],L*0.7));
@@ -250,6 +583,14 @@ function drawScene(){
     for(let i=0;i<6;i++){const x=W*(0.3+0.08*i),y=H*0.2+((frame*1.5+i*40)%(H*0.5));sx.strokeStyle='rgba(150,180,220,.3)';sx.beginPath();sx.moveTo(x,y);sx.lineTo(x,y+5);sx.stroke();}
   }
   precip(W,horizon,r);
+  { const _w=r.wind||0; if(_w>3&&!r.cave){ sx.strokeStyle=`rgba(225,228,235,${Math.min(0.22,_w*0.02)})`;sx.lineWidth=1;   // 风：吹动气流条纹(强度∝风速)
+      const n=Math.min(22,Math.round(_w*2)); for(let i=0;i<n;i++){const y=((i*53)+frame*(2+_w*0.5))%H,x=((i*97)+frame*(1+_w*0.7))%W,len=8+_w*2.2;sx.beginPath();sx.moveTo(x,y);sx.lineTo(x-len,y+1.5);sx.stroke();} } }
+  if(boltFx>0&&!r.cave){ const a=boltFx/6; sx.fillStyle=`rgba(235,242,255,${0.4*a})`; sx.fillRect(0,0,W,H);   // 闪电:全屏闪光+折线
+    sx.strokeStyle='rgba(250,252,255,0.95)';sx.lineWidth=2.5;sx.beginPath();
+    let bx=W*0.5+W*0.22*Math.sin(boltSeed), by=6; sx.moveTo(bx,by);
+    for(let i=1;i<=6;i++){ bx+=20*Math.sin(boltSeed*2+i*1.7); by=i*horizon/6; sx.lineTo(bx,by); } sx.stroke(); }
+  { const veil=(r.skyDim||geoSkyDim||0); if(veil>0.02){   // 遮日幕(火山灰+尘暴)：尘多偏土黄、灰多偏褐
+      const dusty=wDustDimK*(r.dustAir||0)>0.08; sx.fillStyle=dusty?`rgba(175,150,95,${Math.min(0.6,veil*0.85)})`:`rgba(120,95,70,${Math.min(0.6,veil*0.85)})`; sx.fillRect(0,0,W,H); } }
 }
 /* ===== 小地图 ===== */
 let nodeHit=[];
@@ -272,6 +613,26 @@ mc.addEventListener('click',e=>{const rect=mc.getBoundingClientRect(),x=e.client
 /* ===== HUD / 表 ===== */
 const pad2=n=>String(Math.floor(n)).padStart(2,'0');
 function wxOf(r){ if(r.cave)return '🕳 恒温'; return r.storm?(r.Tair<=SnowTemp?'❄️ 雪':'🌧 雨'):((r.C>45)?'☁️ 阴':(sunF(curMin(),curDOY())>0?'☀️ 晴':'🌙 夜')); }
+function airOf(r){ return badAir(r)?('☠️CO₂'+r.co2.toFixed(1)+'%'):(thinAir(r)?('🫁稀薄O₂'+r.o2.toFixed(0)+'%'):('🌬O₂'+r.o2.toFixed(0)+'%')); }
+function tideHud(){ const lv=tideLevel(total), rising=lv>tideLevel(total-2), rng=tideRange(), sp=rng>0.65*tSpring?'大潮':rng<0.42*tSpring?'小潮':'中潮';
+  return '🌊潮 '+(rising?'↑涨':'↓落')+' '+(lv>=0?'+':'')+lv.toFixed(2)+'m·'+sp+'(差'+rng.toFixed(1)+'m)'; }
+function windHud(r){ if(r.cave)return '🕳静风'; const w=r.wind||0, fl=feelsLike(r.Tair,w);
+  const dusty=wDustDimK*(r.dustAir||0)>0.08;
+  return '🌬'+w.toFixed(0)+' '+windCause(r)+(fl<r.Tair-1.5?'(体感'+fl.toFixed(0)+'°)':'')+(dusty?' · 🌫尘暴':''); }
+function iceTag(r){ let s=''; if((r.glacier||0)>20)s+=' · 🧊冰川'+(r.glacier).toFixed(0); if(!r.cave&&!r.sea&&r.Tg<0)s+=' · ❄冻土'; if(r.sea&&r.Tair<iSeaFreeze)s+=' · 🧊海冰'; return s; }
+function stormTag(r){ return (r.charge||0)>0.65 ? (r.storm>0.5?' · ⚡雷暴':' · ⚡旱雷') : ''; }
+function soilTag(r){ if(r.sea||r.cave) return ''; let s=' · 🟫土'+(r.soilDepth||1).toFixed(2); if((r.GW||0)>40) s+=' 💧地下水'+Math.round(r.GW); return s; }   // 土壤发育+含水层
+function bioTag(r){ let s=''; const vent=(r.hvent||0)*coreActivity;   // 海底热液 + 前生命摇篮就绪度
+  if(vent>0.05) s+=' · 🌋海底热液'+(r.redu>0.05?'(还原流体ΔG'+(freeEnergy(r)*100).toFixed(0)+'%)':'');
+  const cr=cradleIndex(r); if(cr>0.08) s+=' · 🧬生命摇篮'+(cr*100).toFixed(0)+'%';
+  if((r.prot||0)>0.3) s+=' · 🧪蛋白质'+(r.prot).toFixed(1)+((r.org||0)>0.3?'(单体'+r.org.toFixed(1)+')':''); else if((r.org||0)>0.5) s+=' · 🧪有机单体'+r.org.toFixed(1);
+  if((r.repl||0)>0.05){ const a=r.rAuto||0; s+=' · 🦠'+(a>0.5?'化能自养菌':(a>0.15?'兼养':'异养复制子'))+(r.repl).toFixed(1)+'(最适'+(r.rTopt||0).toFixed(0)+'℃'+(a>0.1?'·自养'+(a*100).toFixed(0)+'%':'')+')'; } return s; }
+function eclTag(){ const m=curMin(),d=curDOY(); const s=eclSolar,l=eclLunar;   // 日食仅白昼可见(用缓存)
+  if(s>0.02&&sunF(m,d)>0) return ' · 🌑'+(s>0.99?'全日食':'日食'+(s*100).toFixed(0)+'%');
+  if(l>0.02&&sunF(m,d)<=0) return ' · 🌑'+(l>0.95?'月全食(血月)':'月食'+(l*100).toFixed(0)+'%'); return ''; }
+function localPressure(r){ const belt=-20*Math.cos(2*Math.PI*Math.abs(LAT)/60), th=2.0*(r.Tair-13); return 1013+belt-th-(r.elev||0)*0.11; }  // 气压带+热力异常(暖→低)-海拔
+function pressTag(r){ if(r.cave)return''; const p=localPressure(r); return ' · 🌡'+p.toFixed(0)+'hPa('+(p>1016?'高压晴':p<1009?'低压阴雨':'平')+')'; }
+function sedTag(r){ return (r.sediment||0)>3 ? ' · 🪨沉积'+(r.sediment).toFixed(0)+'(固结→'+classifySed(r)+')' : ''; }
 function waterOf(r){ if(r.cave)return '🕳 滴水'; if(r.sea)return '🌊 海·咸';
   const q=drinkable(r)?'🟢可饮':(salinity(r)<0.6?'🟡微咸':'🔴咸'); const dom=domMineral(r);
   return q+(dom?('·'+dom):'')+(hasCrust(r)?' 盐壳':''); }
@@ -279,21 +640,29 @@ function updateUI(){
   const r=byk[player],m=curMin(),d=curDOY();
   document.getElementById('hLoc').textContent=(traveling?('🚶 → '+byk[traveling.to].name):r.name);
   document.getElementById('hTime').textContent='第'+(Math.floor(total/1440)+1)+'天 '+pad2(m/60)+':'+pad2(m%60)+' · '+seasonName(d);
-  document.getElementById('hWx').textContent=wxOf(r)+' · '+r.Tair.toFixed(0)+'°C · '+(r.cave?'🕳恒温':(r.sea?'🌊海水(咸·不可饮)':(drinkable(r)?'🟢淡水可饮':'🔴水偏咸')));
+  document.getElementById('hWx').textContent=wxOf(r)+' · '+r.Tair.toFixed(0)+'°C · '+(r.cave?'🕳恒温':(r.sea?'🌊海水(咸·不可饮)':(drinkable(r)?'🟢淡水可饮':'🔴水偏咸')))+' · '+airOf(r)+(r.sea?' · '+tideHud()+' · 🌊'+(r.wave||0).toFixed(1)+'m'+((r.wave||0)>1.5?'(拍岸)':''):'')+' · '+windHud(r)+pressTag(r)+sedTag(r)+iceTag(r)+stormTag(r)+eclTag()+soilTag(r)+bioTag(r);
+  { const v=byk[VOLC], mp=clamp(magmaP/(gStr+gOverK*v.elev),0,1);
+    const gh=cGhouse*(globalCO2-CO2ref);
+    document.getElementById('hGeo').textContent='🌍g'+pG.toFixed(1)+' Z'+PLANET.metallicity.toFixed(1)+' · 🏔 '+v.name+' '+v.elev.toFixed(0)+'m · 🌋岩浆'+(mp*100).toFixed(0)+'%'+(geoSkyDim>0.05?' · 🌫灰幕':'')+' · CO₂ '+globalCO2.toFixed(2)+'%(温室'+(gh>=0?'+':'')+gh.toFixed(1)+'°)'+' · 🌐'+tRegime(tPatchLon)+' 纬'+LAT.toFixed(0)+'°'+' · 🧲'+magField().toFixed(0)+'μT ☢'+radiationAt(byk[player]).toFixed(2)+(RING?(' · 🪐环'+(curRingSh>0.02?'影−'+(curRingSh*100).toFixed(0)+'%日照':(curRingShine>0.5?'光'+curRingShine.toFixed(1):'侧'))):'')+' · 🜁气'+atmMass.toFixed(2)+'atm'+(Math.abs(seaLevel)>1?' · 🌊海平面'+(seaLevel>0?'+':'')+seaLevel.toFixed(0)+'m':'')+(Math.abs(TILT-23.44)>0.2?' · 倾角'+TILT.toFixed(1)+'°':'')+' · '+lastGeo; }
   document.getElementById('travel').style.display=traveling?'flex':'none';
   if(traveling)document.getElementById('travel').textContent='🚶 赶往 '+byk[traveling.to].name+'… 剩 '+traveling.left+' 分钟';
-  let html=''; for(const r2 of locs){ html+=`<tr class="${r2.key===player?'here':''}"><td>${r2.name}</td><td>${r2.Tair.toFixed(0)}°</td><td>${wxOf(r2)}</td><td>${waterOf(r2)}</td></tr>`; }
+  let html=''; for(const r2 of locs){ html+=`<tr class="${r2.key===player?'here':''}"><td>${r2.name}</td><td>${r2.Tair.toFixed(0)}°</td><td>${wxOf(r2)}${badAir(r2)?' ☠️':(thinAir(r2)?' 🫁':'')}</td><td>${waterOf(r2)}</td></tr>`; }
   document.getElementById('tbody').innerHTML=html;
-  const nb=neighbors(player); document.getElementById('go').innerHTML='可前往：'+nb.map(n=>`<b data-k="${n[0]}">${byk[n[0]].name}(${n[1]}分)</b>`).join(' · ');
+  const ore=oresOf(byk[player]); const nb=neighbors(player);
+  document.getElementById('go').innerHTML=(ore?('⛏ 本地矿藏：'+ore+'<br>'):'')+'可前往：'+nb.map(n=>`<b data-k="${n[0]}">${byk[n[0]].name}(${n[1]}分)</b>`).join(' · ');
   document.querySelectorAll('#go b').forEach(b=>b.onclick=()=>travelTo(b.dataset.k));
 }
 let last=performance.now();
-function loop(now){const dt=Math.min((now-last)/1000,0.1);last=now;frame++;step(dt);drawScene();drawMini();updateUI();requestAnimationFrame(loop);}
+function loop(now){const dt=Math.min((now-last)/1000,0.1);last=now;frame++;if(eruptFx>0)eruptFx--;step(dt);
+  if((byk[player].lightning||0)>0.003){boltFx=6;boltSeed=frame;} if(boltFx>0)boltFx--;
+  drawScene();drawMini();updateUI();requestAnimationFrame(loop);}
 requestAnimationFrame(loop);
 /* ===== 控件 ===== */
 document.getElementById('bPause').onclick=function(){paused=!paused;this.textContent=paused?'▶':'⏸';};
 document.querySelectorAll('.spd').forEach(b=>b.onclick=()=>{speed=+b.dataset.s;document.querySelectorAll('.spd').forEach(x=>x.classList.remove('on'));b.classList.add('on');});
 document.getElementById('biome').onchange=e=>{LAT=+e.target.value;resetAll();};
+document.getElementById('wtype').onchange=e=>{WORLDTYPE=e.target.value;resetAll();};
+document.getElementById('bGeo').onclick=()=>{ for(let i=0;i<90;i++){ geoYear(); if(eruptFx>200) break; } };   // 快进到下次喷发：山长高+灰幕致冷
 </script>
 </body>
 </html>
