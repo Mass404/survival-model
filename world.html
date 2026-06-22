@@ -363,6 +363,7 @@ const neuroForage=0.4, neuroEvade=0.6, neuroCost=0.15, neuroAdaptK=0.04, neuroSe
 // 登陆套装:rDry干旱耐受(gate陆地)+rUV辐射耐受+臭氧(O2→UV屏蔽)。只gate陆地,水生不受影响→氧化后演化rDry即可登陆
 const dryWidth=0.4, uvHarm=0.8, plantWeatherK=2.0;   // 陆生植物根系把风化加速到~3倍(→抽CO2/造土/释矿)
 const morphK=0.05, morphCost=0.02, morphGate=0.35, morphGateW=0.25;   // 形态/发育(根因二):Hox式发育级联弛豫率/维持成本(无选择压→归零)/发育门阈值/门过渡宽度
+const morphForage=0.5, axisSizeK=0.35;   // 形态反馈增殖:分节附肢→运动觅食增益 / 内骨骼体轴→撑大体型(减体型增殖惩罚)。形态=0时项=0→向后兼容标定
 const endoWiden=2.5, endoMaint=0.5, endoAdaptK=0.04, endoSelCost=0.12;   // 温血:拓宽耐温×3.5,但维持代谢翻倍——冷/多变环境才划算
 const dryOf=r=>clamp(1-(((r.Soil||0)+(r.Lake||0)+(r.sea?50:0))/30),0,1);   // 干燥度:海/湿→0,旱地→~1
 // 细胞分化rDiff(germ-soma+分工):前提多细胞,稳定/竞争→分工。收益=高效+防御,成本=只生殖系繁殖→繁殖产出降
@@ -576,8 +577,8 @@ function stepMinute(){
         const light=clamp((r.litAvg||0)*1.6,0,1);   // 透光=日均光EMA(避免昼夜闪烁误导光合选择)
         const o2f=clamp((r.o2||0)/o2half,0,1), ae=clamp(r.rAero||0,0,1), eu=clamp(r.rEuk||0,0,1), aerB=1+aerBoost*ae*o2f+euBoost*eu*o2f;   // 好氧呼吸+真核线粒体:富氧→产能暴涨(O2从毒变资源)
         const sz=clamp(r.rSize||0,0,1), mu=clamp(r.rMulti||0,0,1), df=clamp(r.rDiff||0,0,1), sx=clamp(r.rSex||0,0,1);
-        const sh=clamp(r.rShell||0,0,1), nu=clamp(r.rNeuro||0,0,1), sy=clamp(r.rSymb||0,0,1), nLimit=clamp(1-((r.dis&&r.dis[18])||0)/2,0,1), szSlow=1-sizeCost*sz*(1-0.5*eu-gigantO2*clamp(globalO2/10,0,1)*(1-clamp(r.rEndo||0,0,1)));   // 共生投入 + 氮限度 + 体型增殖减速(高O2→变温动物气管供氧解禁→巨型化,石炭巨虫;温血闭式循环不吃这红利)
-        const gB=bBoost*aerB*szSlow*(1-0.3*mu)*(1-diffRepCost*df)*(1-sexRepCost*sx)*(1-shellGrowCost*sh)*(1+neuroForage*nu*clamp(r.rMove||0,0,1))*(1+symbBenefit*sy*nLimit)*(1-symbCost*sy)*morphSynergy(r);   // 各性状增殖代价 + 神经×移动觅食 + 共生供养 + 组合式体制协同(专精得益/骑墙受罚→多峰)
+        const sh=clamp(r.rShell||0,0,1), nu=clamp(r.rNeuro||0,0,1), sy=clamp(r.rSymb||0,0,1), nLimit=clamp(1-((r.dis&&r.dis[18])||0)/2,0,1), szSlow=1-sizeCost*sz*(1-0.5*eu-axisSizeK*clamp(r.rAxis||0,0,1)-gigantO2*clamp(globalO2/10,0,1)*(1-clamp(r.rEndo||0,0,1)));   // 共生投入 + 氮限度 + 体型增殖减速(高O2→变温动物气管供氧解禁→巨型化,石炭巨虫;温血闭式循环不吃这红利)
+        const gB=bBoost*aerB*szSlow*(1-0.3*mu)*(1-diffRepCost*df)*(1-sexRepCost*sx)*(1-shellGrowCost*sh)*(1+neuroForage*nu*clamp(r.rMove||0,0,1))*(1+morphForage*clamp(r.rLimb||0,0,1)*clamp(r.rSeg||0,0,1)*clamp(r.rMove||0,0,1))*(1+symbBenefit*sy*nLimit)*(1-symbCost*sy)*morphSynergy(r);   // 各性状增殖代价 + 神经×移动觅食 + 共生供养 + 组合式体制协同(专精得益/骑墙受罚→多峰)
         const wHet=rBirthK*hetCap*fit*gB, wChemo=rBirthAutoK*clamp(r.redu||0,0,1)*co2a*fit*gB, wPhoto=rBirthPhotoK*light*co2a*fit*gB;   // 异养/化能/光合 人均适应度(膜+好氧+体型增益)
         const realHet=Math.min(wHet*r.repl*(1-a), food*rYield);                                          // 异养:食限(守恒)
         const realChemo=Math.max(0,Math.min(wChemo*r.repl*a*(1-p), (r.redu||0)/rReduK, ((r.co2||0)-0.05)/cFixK)); // 化能:还原剂+CO2限
