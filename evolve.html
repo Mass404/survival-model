@@ -65,6 +65,7 @@
       <div class="kv"><span>已被生命占据的格</span><b id="nCells">—</b></div>
       <div class="kv"><span>全球总生物量</span><b id="nBio">—</b></div>
       <div class="kv"><span>最繁茂纬度带</span><b id="nPeak">—</b></div>
+      <div class="kv"><span>现存物种数</span><b id="nSpecies">—</b></div>
     </div>
   </div>
 </div>
@@ -133,8 +134,9 @@ function initClimate(){
 }
 
 // ====================== 生命层(阶段1:起源 + logistic + 网格扩散,已数值验证) ======================
-let N=[], Hab=[], Topt=[], Salt=[], Dry=[];   // 生物量 + 适应性状:最适温/耐盐/耐旱(追当地环境)
-const SEED=0.05, IGNITE=0.62, Kmax=40, rb=0.9, rd=0.12, MOVE=0.12, FITW=14, SALTW=2.5, DRYW=0.4;
+let N=[], Hab=[], Topt=[], Salt=[], Dry=[], spId=[];   // 生物量 + 适应性状(最适温/耐盐/耐旱) + 物种身份(连通分量)
+let phylo=[], nextSp=1;   // 谱系档案:{id,parent,bornY,deathY,Topt,land} + 物种id分配器
+const SEED=0.05, IGNITE=0.45, Kmax=40, rb=0.9, rd=0.12, MOVE=0.12, FITW=14, SALTW=2.5, DRYW=0.4, BARRIER=0.04, TBUCKET=9;   // TBUCKET:温度带宽(℃)→物种沿温度带分(同档+空间连通+同栖息地=一个种)
 let geoT=0;   // 地质时间(年),供后续地质/演化层
 function updateHab(){   // 跨尺度:生命读当前气候算宜居度(温度宜居 × 水)
   for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++){
@@ -158,13 +160,39 @@ function stepLife(dt){
   const flow=grid(0), fTo=grid(0), fSa=grid(0), fDr=grid(0), f=clamp(MOVE*dt/10,0,0.24);   // 四邻扩散+带性状迁移(守恒)
   for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++){ const n=N[j][i]; if(n<=0)continue;
     const nb=[[j,(i+1)%NLon],[j,(i-1+NLon)%NLon]]; if(j>0)nb.push([j-1,i]); if(j<NLat-1)nb.push([j+1,i]);
-    for(const ji of nb){ const mv=f*Math.max(0,(n-N[ji[0]][ji[1]])*0.5)*Hab[ji[0]][ji[1]]; flow[j][i]-=mv;
+    for(const ji of nb){ const bar=(Land[j][i]!==Land[ji[0]][ji[1]])?BARRIER:1;   // 栖息地屏障:陆生过不了海(隔离)
+      const mv=f*bar*Math.max(0,(n-N[ji[0]][ji[1]])*0.5)*Hab[ji[0]][ji[1]]; flow[j][i]-=mv;
       flow[ji[0]][ji[1]]+=mv; fTo[ji[0]][ji[1]]+=mv*Topt[j][i]; fSa[ji[0]][ji[1]]+=mv*Salt[j][i]; fDr[ji[0]][ji[1]]+=mv*Dry[j][i]; } }
   for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++){ if(flow[j][i]>0){ const tot=N[j][i]+flow[j][i];   // 迁入者性状按生物量加权混入
       if(tot>0){ Topt[j][i]=(Topt[j][i]*N[j][i]+fTo[j][i])/tot; Salt[j][i]=(Salt[j][i]*N[j][i]+fSa[j][i])/tot; Dry[j][i]=(Dry[j][i]*N[j][i]+fDr[j][i])/tot; } }
     N[j][i]=Math.max(0,N[j][i]+flow[j][i]); }
 }
-function stepGeo(){ geoT++; }   // 地质层(阶段4 再填:板块/碳氧账/大灭绝)
+function updateSpecies(){   // 物种=空间连通+同栖息地的生命簇;追踪id(起源/分裂/灭绝)入谱系
+  const ALIVE=(j,i)=>N[j][i]>SEED;
+  const comp=grid(-1); let nc=0; const members=[];
+  for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++){ if(comp[j][i]>=0||!ALIVE(j,i))continue;
+    const st=[[j,i]]; comp[j][i]=nc; const mem=[];
+    while(st.length){ const c=st.pop(), cj=c[0], ci=c[1]; mem.push(c);
+      const nb=[[cj,(ci+1)%NLon],[cj,(ci-1+NLon)%NLon]]; if(cj>0)nb.push([cj-1,ci]); if(cj<NLat-1)nb.push([cj+1,ci]);
+      for(const nn of nb){ const nj=nn[0],ni=nn[1]; if(comp[nj][ni]<0 && ALIVE(nj,ni) && Land[nj][ni]===Land[cj][ci] && Math.floor(Topt[nj][ni]/TBUCKET)===Math.floor(Topt[cj][ci]/TBUCKET)){ comp[nj][ni]=nc; st.push(nn); } } }
+    members.push(mem); nc++; }
+  const compOld=[];
+  for(let c=0;c<nc;c++){ const cnt={}; for(const m of members[c]){ const o=spId[m[0]][m[1]]; if(o>0)cnt[o]=(cnt[o]||0)+1; }
+    let best=0,bo=0; for(const k in cnt) if(cnt[k]>best){best=cnt[k];bo=+k;} compOld[c]=bo; }
+  const seen=new Set(), order=[...Array(nc).keys()].sort((a,b)=>members[b].length-members[a].length);
+  for(const c of order){ const old=compOld[c];
+    let s=0,w=0; for(const m of members[c]){s+=Topt[m[0]][m[1]]*N[m[0]][m[1]];w+=N[m[0]][m[1]];} const mean=w?s/w:0, land=Land[members[c][0][0]][members[c][0][1]];
+    let id;
+    if(old===0){ id=nextSp++; phylo.push({id,parent:-1,bornY:geoT,deathY:-1,Topt:+mean.toFixed(1),land}); }   // 起源
+    else if(!seen.has(old)){ id=old; seen.add(old); }   // 该旧种最大分量→继承
+    else { id=nextSp++; phylo.push({id,parent:old,bornY:geoT,deathY:-1,Topt:+mean.toFixed(1),land}); }   // 裂出的次要分量→新种(异域分支)
+    for(const m of members[c]) spId[m[0]][m[1]]=id; }
+  const live=new Set(); for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++) if(spId[j][i]>0&&ALIVE(j,i)) live.add(spId[j][i]);
+  for(const p of phylo) if(p.deathY<0 && !live.has(p.id)) p.deathY=geoT;   // 灭绝
+  for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++) if(!ALIVE(j,i)) spId[j][i]=0;
+  if(phylo.length>2000) phylo.splice(0, phylo.length-2000);
+}
+function stepGeo(){ geoT++; updateSpecies(); }   // 地质年:更新物种/谱系(阶段4 再填板块/碳氧账/大灭绝)
 
 // ====================== 着色 / 渲染 ======================
 function lerp(a,b,t){return a+(b-a)*t;}
@@ -175,6 +203,10 @@ const PREC=[[150,110,70],[180,160,90],[120,190,110],[70,170,170],[40,110,200]];
 const LIFEC=[[10,18,30],[20,70,50],[40,140,70],[120,210,90],[210,245,150]];
 function tcol(v){ return ramp(TEMP,(v+40)/80); }
 function rgb(c){return `rgb(${c[0]},${c[1]},${c[2]})`;}
+function spColor(id){ const h=((id*137.508)%360)/360, s=0.62, l=0.56;   // 黄金角→每物种一个稳定色相
+  const q=l<0.5?l*(1+s):l+s-l*s, p=2*l-q;
+  const f=x=>{x=(x%1+1)%1; return x<1/6?p+(q-p)*6*x:x<1/2?q:x<2/3?p+(q-p)*(2/3-x)*6:p;};
+  return [Math.round(f(h+1/3)*255),Math.round(f(h)*255),Math.round(f(h-1/3)*255)]; }
 const cv=document.getElementById('cv'), cx=cv.getContext('2d');
 const W=cv.width, H=cv.height, CW=W/NLon, CH=H/NLat;
 let view='life';
@@ -182,6 +214,7 @@ function cellColor(j,i){
   if(view==='life'){ const base=Land[j][i]?[26,34,24]:[12,20,34]; const v=clamp(N[j][i]/Kmax,0,1);
     return v<0.02?base:ramp(LIFEC,v); }
   if(view==='adapt'){ if(N[j][i]<SEED) return [16,20,28]; return tcol(Topt[j][i]); }   // 按生命的最适温着色→看生物地理分化
+  if(view==='species'){ if(N[j][i]<SEED||spId[j][i]<1) return [16,20,28]; return spColor(spId[j][i]); }   // 每物种一色→看隔离分布
   if(view==='temp') return tcol(T[j][i]);
   if(view==='prec') return ramp(PREC,P[j][i]/1.2);
   if(view==='sst')  return Land[j][i] ? [22,28,46] : tcol(S[j][i]);
@@ -210,7 +243,7 @@ function arrow(x1,y1,x2,y2){ cx.beginPath();cx.moveTo(x1,y1);cx.lineTo(x2,y2);cx
 // ====================== 多尺度时钟 + 循环 ======================
 const LIFE_STEP=10, GEO_STEP=YEAR;   // 生命=每旬 / 地质=每年(气候=每天)
 let day=0, playing=true;
-function spinUp(){ initClimate(); N=grid(0); Hab=grid(0); Topt=grid(0); Salt=grid(0); Dry=grid(0); MOC=1; geoT=0;
+function spinUp(){ initClimate(); N=grid(0); Hab=grid(0); Topt=grid(0); Salt=grid(0); Dry=grid(0); spId=grid(0); phylo=[]; nextSp=1; MOC=1; geoT=0;
   for(let d=0; d<3*YEAR; d++) stepDay(d%YEAR);   // 气候先预热(此时无生命)
   day=0; }
 function seasonName(d){ const q=((d-EQX+YEAR)%YEAR)*4/YEAR|0; return ['🌱春','☀️夏','🍂秋','❄️冬'][q]; }
@@ -222,6 +255,7 @@ function updatePanel(){
   document.getElementById('nCells').textContent=`${cells} / ${NLat*NLon}`;
   document.getElementById('nBio').textContent=bio.toFixed(0);
   document.getElementById('nPeak').textContent= bandBest.v>0.5? bandBest.lat : '尚无生命';
+  document.getElementById('nSpecies').textContent= phylo.filter(p=>p.deathY<0).length;
 }
 let last=0, daysPerSec=40;
 function loop(ts){
@@ -232,7 +266,7 @@ function loop(ts){
 }
 
 // ====================== 控件 ======================
-const VIEWS=[['life','生命'],['adapt','适应(最适温)'],['temp','气温带'],['prec','降水'],['sst','海温']];
+const VIEWS=[['life','生命'],['adapt','适应(最适温)'],['species','物种'],['temp','气温带'],['prec','降水'],['sst','海温']];
 const vbox=document.getElementById('views');
 VIEWS.forEach(([k,label])=>{ const b=document.createElement('button'); b.textContent=label; b.dataset.v=k; if(k==='life')b.classList.add('on');
   b.onclick=()=>{ view=k; [...vbox.children].forEach(c=>c.classList.toggle('on',c.dataset.v===k)); setLegend(); }; vbox.appendChild(b); });
@@ -240,6 +274,7 @@ function setLegend(){
   const bar=document.getElementById('lgBar'), lo=document.getElementById('lgLo'), hi=document.getElementById('lgHi');
   let stops,a,b;
   if(view==='life'){stops=LIFEC;a='无生命';b='繁茂';}
+  else if(view==='species'){stops=[[230,80,80],[230,200,80],[90,200,120],[80,170,230],[180,110,230]];a='物种A';b='物种Z';}
   else if(view==='adapt'){stops=TEMP;a='冷适应';b='暖适应';}
   else if(view==='temp'||view==='sst'){stops=TEMP;a='-40°C';b='+40°C';}
   else {stops=PREC;a='干';b='多雨';}
