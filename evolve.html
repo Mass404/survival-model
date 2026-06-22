@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌍 全球演化 · Evolve</title>
+<style>
+  :root{ --bg:#0b1020; --panel:#141b30; --ink:#e8ecf6; --mut:#8a96b3; --line:#26304d; --hi:#5db0ff; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+  header{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  h1{font-size:17px;margin:0;font-weight:600}
+  .sub{color:var(--mut);font-size:13px}
+  .wrap{display:flex;gap:16px;padding:16px 18px;flex-wrap:wrap;align-items:flex-start}
+  .stage{position:relative;background:#070b18;border:1px solid var(--line);border-radius:10px;padding:8px}
+  canvas{display:block;border-radius:6px;cursor:crosshair}
+  .side{flex:1;min-width:260px;max-width:420px;display:flex;flex-direction:column;gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .card h2{font-size:13px;margin:0 0 8px;color:var(--mut);font-weight:600;letter-spacing:.04em}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  button{background:#1d2742;color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:6px 11px;cursor:pointer;font-size:13px}
+  button:hover{border-color:var(--hi)}
+  button.on{background:var(--hi);color:#04122b;border-color:var(--hi);font-weight:600}
+  .kv{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px dashed var(--line)}
+  .kv:last-child{border-bottom:0}
+  .kv b{font-weight:600}
+  .legend{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mut);margin-top:8px}
+  .bar{height:10px;flex:1;border-radius:5px}
+  .hint{color:var(--mut);font-size:12px;margin-top:6px}
+  input[type=range]{width:120px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🌍 全球演化 · Evolve</h1>
+  <span class="sub" id="clock">—</span>
+  <span class="sub">网格星球 · 多尺度时间 · 生命在气候带上演化(阶段1:起源+扩散)</span>
+</header>
+
+<div class="wrap">
+  <div class="stage"><canvas id="cv" width="720" height="380"></canvas></div>
+  <div class="side">
+    <div class="card">
+      <h2>视图</h2>
+      <div class="row" id="views"></div>
+      <div class="row" style="margin-top:8px">
+        <label><input type="checkbox" id="ckWind"> 盛行风</label>
+        <label><input type="checkbox" id="ckBelt"> 雨带</label>
+        <label><input type="checkbox" id="ckOcean"> 全海洋</label>
+      </div>
+      <div class="legend"><span id="lgLo">低</span><div class="bar" id="lgBar"></div><span id="lgHi">高</span></div>
+    </div>
+    <div class="card">
+      <h2>时间(多尺度)</h2>
+      <div class="row">
+        <button id="play" class="on">⏸ 暂停</button>
+        <button id="reset">↺ 重置</button>
+        <label>速度 <input type="range" id="spd" min="1" max="120" value="40"></label>
+        <span class="sub" id="spdv"></span>
+      </div>
+      <div class="hint">气候=每天 · 生命=每旬(10天) · 地质=每年 —— 各按自己的变化速度推进</div>
+    </div>
+    <div class="card">
+      <h2>🌱 生命</h2>
+      <div class="kv"><span>已被生命占据的格</span><b id="nCells">—</b></div>
+      <div class="kv"><span>全球总生物量</span><b id="nBio">—</b></div>
+      <div class="kv"><span>最繁茂纬度带</span><b id="nPeak">—</b></div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ====================== 气候底座(planet.html 的验证过模型) ======================
+const NLat=18, NLon=24, YEAR=365, TILT=23.44, EQX=80;
+const LandInertia=0.20, SeaCouple=0.15, Adv=0.18;
+const OceanInertia=0.012, OceanHeatMix=0.05, SalRate=0.004, SalMix=0.008, GyreCool=0.08;
+const MOCgain=0.8, MOCheat=0.12; let MOC=1, FRESH=0;
+const PLANET={mass:5.972e24, radiusKm:6371, rotationH:24, starFlux:1.0};
+const OMEGA=2*Math.PI/(PLANET.rotationH*3600), FRIC=8e-5, LMIN=120, LMAX=240;
+const GF=-16, REF=40, LAPSE=6.5/1000;
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const latof = j => -90 + (j+0.5)*180/NLat;
+const lonof = i => (i+0.5)*360/NLon;
+let WATERWORLD=false;
+const isLand = i => { if(WATERWORLD) return false; const lo=lonof(i); return lo>=LMIN && lo<=LMAX; };
+const decl = d => TILT*Math.sin(2*Math.PI*(d-EQX)/YEAR);
+const eqT = (lat,dc) => 30 - 65*(1-Math.cos((lat-dc)*0.9*Math.PI/180));
+function cellV(lat){ const a=Math.abs(lat), s=lat>=0?1:-1; const v=a<30?-2.0:a<60?2.0:-1.5; return v*s; }
+function uband(lat){ return 2*OMEGA*Math.sin(lat*Math.PI/180)*cellV(lat)/FRIC; }
+function precipBand(lat,dc){ const d=Math.abs(lat-dc*0.5), a=Math.abs(lat);
+  return d<12?1.0 : (a>22&&a<38)?0.1 : (a>=45&&a<68)?0.7 : (a>=78)?0.1 : 0.4; }
+let UMAX=1; for(let j=0;j<NLat;j++) UMAX=Math.max(UMAX,Math.abs(uband(latof(j))));
+
+let Land=[], T=[], S=[], SAL=[], P=[], U=[], PR=[], FR=[];
+function grid(v){ return Array.from({length:NLat},()=>Array(NLon).fill(v)); }
+function nearSea(j,i,dc){ for(let d=1;d<=NLon/2;d++){ const il=((i-d)%NLon+NLon)%NLon, ir=(i+d)%NLon;
+    if(!Land[j][il]) return S[j][il]; if(!Land[j][ir]) return S[j][ir]; } return Math.max(-2,eqT(latof(j),dc)); }
+function stepDay(d){
+  const dc=decl(d);
+  const s0=S.map(r=>r.slice()), sl0=SAL.map(r=>r.slice());
+  for(let j=0;j<NLat;j++){ const jl=Math.max(0,j-1),jr=Math.min(NLat-1,j+1), eqO=Math.max(-2,eqT(latof(j),dc));
+    for(let i=0;i<NLon;i++){ if(Land[j][i])continue;
+      S[j][i]+=OceanInertia*(eqO-s0[j][i])+OceanHeatMix*((s0[jl][i]+s0[jr][i])/2-s0[j][i]);
+      const ev=Math.max(0,s0[j][i])/30.0;
+      SAL[j][i]+=SalRate*(ev-1.6*precipBand(latof(j),dc))+SalMix*((sl0[jl][i]+sl0[jr][i])/2-sl0[j][i]); }}
+  { let dens=0,n=0; for(let j=0;j<NLat;j++){ if(Math.abs(latof(j))<50)continue; for(let i=0;i<NLon;i++){ if(Land[j][i])continue; dens+=0.8*(SAL[j][i]-34.5)-0.12*(S[j][i]-10)-FRESH; n++; } }
+    const tgt=Math.max(0, n?(dens/n)*MOCgain:0); MOC+=0.05*(tgt-MOC);
+    for(let j=0;j<NLat;j++){ const a=Math.abs(latof(j)); for(let i=0;i<NLon;i++){ if(Land[j][i])continue;
+      if(a>=50) S[j][i]+=MOCheat*MOC; else if(a<35) S[j][i]-=MOCheat*MOC*0.5; } } }
+  for(let j=0;j<NLat;j++){ const eqA=eqT(latof(j),dc);
+    for(let i=0;i<NLon;i++){ if(Land[j][i]) T[j][i]+=LandInertia*(eqA-T[j][i]); else T[j][i]+=SeaCouple*(S[j][i]-T[j][i]); }}
+  const t1=T.map(r=>r.slice());
+  for(let j=0;j<NLat;j++){ const u=uband(latof(j)), w=Math.min(1,Math.abs(u)/UMAX), up=u>0?-1:1;
+    for(let i=0;i<NLon;i++){ const iu=((i+up)%NLon+NLon)%NLon; T[j][i]+=Adv*w*(t1[j][iu]-t1[j][i]); U[j][i]=u; }}
+  for(let j=0;j<NLat;j++){ const base=precipBand(latof(j),dc);
+    for(let i=0;i<NLon;i++){ let p=base;
+      if(Land[j][i]){ const dT=T[j][i]-nearSea(j,i,dc); p*=1+0.5*Math.max(0,Math.min(1,dT/8))-0.4*Math.max(0,Math.min(1,-dT/8)); }
+      P[j][i]=Math.max(0,Math.min(1.2,p)); }}
+  for(let j=0;j<NLat;j++){ const a=Math.abs(latof(j)); if(a<18||a>42)continue;
+    for(let i=0;i<NLon;i++){ if(Land[j][i])continue; if(Land[j][(i+1)%NLon]) S[j][i]-=GyreCool; }}
+  const PBELT=20,PKT=2.0;
+  for(let j=0;j<NLat;j++){ const belt=-PBELT*Math.cos(2*Math.PI*Math.abs(latof(j))/60);
+    let m=0; for(let i=0;i<NLon;i++)m+=T[j][i]; m/=NLon;
+    for(let i=0;i<NLon;i++) PR[j][i]=1013+belt-PKT*(T[j][i]-m); }
+  for(let j=0;j<NLat;j++){ const jl=Math.max(0,j-1),jr=Math.min(NLat-1,j+1);
+    for(let i=0;i<NLon;i++) FR[j][i]=Math.abs(T[jr][i]-T[jl][i])/2; }
+}
+function initClimate(){
+  Land=grid(false); T=grid(0); S=grid(0); SAL=grid(34.5); P=grid(0); U=grid(0); PR=grid(1013); FR=grid(0);
+  for(let j=0;j<NLat;j++){ const lat=latof(j);
+    for(let i=0;i<NLon;i++){ Land[j][i]=isLand(i); T[j][i]=eqT(lat,0); S[j][i]=Math.max(-2,eqT(lat,0)); }}
+}
+
+// ====================== 生命层(阶段1:起源 + logistic + 网格扩散,已数值验证) ======================
+let N=[], Hab=[];
+const SEED=0.05, IGNITE=0.62, Kmax=40, rb=0.9, rd=0.12, MOVE=0.12;
+let geoT=0;   // 地质时间(年),供后续地质/演化层
+function updateHab(){   // 跨尺度:生命读当前气候算宜居度(温度宜居 × 水)
+  for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++){
+    const tFit=Math.exp(-Math.pow((T[j][i]-25)/16,2)), water=Land[j][i]?P[j][i]:1.0;
+    Hab[j][i]=clamp(tFit*Math.sqrt(Math.max(0,water)),0,1); }
+}
+function stepLife(dt){
+  updateHab();
+  for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++) if(Hab[j][i]>IGNITE && N[j][i]<SEED) N[j][i]=SEED;   // 起源(确定性)
+  for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++){ const h=Hab[j][i]; if(N[j][i]<=0)continue;
+    const K=Math.max(1e-3,Kmax*h), r0=rb*h-rd, n=N[j][i];
+    N[j][i]= r0>1e-6 ? K/(1+(K/n-1)*Math.exp(-r0*dt)) : Math.max(0,n*Math.exp(r0*dt)); }   // 解析logistic(大步稳)
+  const flow=grid(0), f=clamp(MOVE*dt/10,0,0.24);   // 四邻扩散(守恒,大步限幅)
+  for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++){ const n=N[j][i]; if(n<=0)continue;
+    const nb=[[j,(i+1)%NLon],[j,(i-1+NLon)%NLon]]; if(j>0)nb.push([j-1,i]); if(j<NLat-1)nb.push([j+1,i]);
+    for(const ji of nb){ const g=Math.max(0,(n-N[ji[0]][ji[1]])*0.5), mv=f*g*Hab[ji[0]][ji[1]]; flow[j][i]-=mv; flow[ji[0]][ji[1]]+=mv; } }
+  for(let j=0;j<NLat;j++)for(let i=0;i<NLon;i++) N[j][i]=Math.max(0,N[j][i]+flow[j][i]);
+}
+function stepGeo(){ geoT++; }   // 地质层(阶段4 再填:板块/碳氧账/大灭绝)
+
+// ====================== 着色 / 渲染 ======================
+function lerp(a,b,t){return a+(b-a)*t;}
+function mix(c1,c2,t){return [Math.round(lerp(c1[0],c2[0],t)),Math.round(lerp(c1[1],c2[1],t)),Math.round(lerp(c1[2],c2[2],t))];}
+function ramp(stops,t){ t=Math.max(0,Math.min(1,t)); const n=stops.length-1; const x=t*n; const i=Math.min(n-1,Math.floor(x)); return mix(stops[i],stops[i+1],x-i); }
+const TEMP=[[20,40,120],[40,120,200],[90,190,220],[120,200,150],[235,220,120],[235,150,60],[200,50,40]];
+const PREC=[[150,110,70],[180,160,90],[120,190,110],[70,170,170],[40,110,200]];
+const LIFEC=[[10,18,30],[20,70,50],[40,140,70],[120,210,90],[210,245,150]];
+function tcol(v){ return ramp(TEMP,(v+40)/80); }
+function rgb(c){return `rgb(${c[0]},${c[1]},${c[2]})`;}
+const cv=document.getElementById('cv'), cx=cv.getContext('2d');
+const W=cv.width, H=cv.height, CW=W/NLon, CH=H/NLat;
+let view='life';
+function cellColor(j,i){
+  if(view==='life'){ const base=Land[j][i]?[26,34,24]:[12,20,34]; const v=clamp(N[j][i]/Kmax,0,1);
+    return v<0.02?base:ramp(LIFEC,v); }
+  if(view==='temp') return tcol(T[j][i]);
+  if(view==='prec') return ramp(PREC,P[j][i]/1.2);
+  if(view==='sst')  return Land[j][i] ? [22,28,46] : tcol(S[j][i]);
+  return [0,0,0];
+}
+function draw(){
+  for(let j=0;j<NLat;j++) for(let i=0;i<NLon;i++){ const y=(NLat-1-j)*CH;
+    cx.fillStyle=rgb(cellColor(j,i)); cx.fillRect(i*CW,y,CW+0.5,CH+0.5); }
+  cx.strokeStyle='rgba(255,255,255,.4)'; cx.lineWidth=1.5;
+  for(let j=0;j<NLat;j++) for(let i=0;i<NLon;i++){ if(!Land[j][i])continue; const y=(NLat-1-j)*CH;
+    if(!isLand((i+1)%NLon)){ cx.beginPath();cx.moveTo((i+1)*CW,y);cx.lineTo((i+1)*CW,y+CH);cx.stroke(); }
+    if(!isLand((i-1+NLon)%NLon)){ cx.beginPath();cx.moveTo(i*CW,y);cx.lineTo(i*CW,y+CH);cx.stroke(); } }
+  if(document.getElementById('ckBelt').checked){
+    for(let j=0;j<NLat;j++) for(let i=0;i<NLon;i++){ if(P[j][i]<0.6)continue; const y=(NLat-1-j)*CH;
+      cx.fillStyle=`rgba(90,160,255,${Math.min(.4,(P[j][i]-0.5)*0.5)})`; cx.fillRect(i*CW,y,CW,CH); } }
+  if(document.getElementById('ckWind').checked){
+    cx.strokeStyle='rgba(255,255,255,.6)'; cx.fillStyle='rgba(255,255,255,.6)'; cx.lineWidth=1.4;
+    for(let j=0;j<NLat;j++){ const u=uband(latof(j)); if(Math.abs(u)<0.4)continue; const y=(NLat-1-j)*CH+CH/2;
+      for(let i=2;i<NLon;i+=5){ const x=i*CW+CW/2; const len=Math.min(CW*1.2,6+Math.abs(u)*1.5)*(u>0?1:-1); arrow(x-len/2,y,x+len/2,y); } } }
+  cx.fillStyle='rgba(255,255,255,.55)'; cx.font='10px system-ui';
+  [60,30,0,-30,-60].forEach(L=>{ const y=(90-L)/180*H; cx.fillText((L>0?L+'°N':L<0?(-L)+'°S':'赤道'),3,y-2);
+    cx.strokeStyle='rgba(255,255,255,.12)';cx.beginPath();cx.moveTo(0,y);cx.lineTo(W,y);cx.stroke(); });
+}
+function arrow(x1,y1,x2,y2){ cx.beginPath();cx.moveTo(x1,y1);cx.lineTo(x2,y2);cx.stroke(); const dir=x2>x1?1:-1; cx.beginPath();cx.moveTo(x2,y2);cx.lineTo(x2-4*dir,y2-2);cx.lineTo(x2-4*dir,y2+2);cx.closePath();cx.fill(); }
+
+// ====================== 多尺度时钟 + 循环 ======================
+const LIFE_STEP=10, GEO_STEP=YEAR;   // 生命=每旬 / 地质=每年(气候=每天)
+let day=0, playing=true;
+function spinUp(){ initClimate(); N=grid(0); Hab=grid(0); MOC=1; geoT=0;
+  for(let d=0; d<3*YEAR; d++) stepDay(d%YEAR);   // 气候先预热(此时无生命)
+  day=0; }
+function seasonName(d){ const q=((d-EQX+YEAR)%YEAR)*4/YEAR|0; return ['🌱春','☀️夏','🍂秋','❄️冬'][q]; }
+function updatePanel(){
+  document.getElementById('clock').textContent = `地质 ${geoT} 年 · 第 ${day%YEAR} 天 · ${seasonName(day%YEAR)}`;
+  let cells=0, bio=0, bandBest={lat:'—',v:-1};
+  for(let j=0;j<NLat;j++){ let bs=0; for(let i=0;i<NLon;i++){ if(N[j][i]>SEED)cells++; bio+=N[j][i]; bs+=N[j][i]; }
+    if(bs/NLon>bandBest.v){ bandBest={lat:latof(j).toFixed(0)+'°', v:bs/NLon}; } }
+  document.getElementById('nCells').textContent=`${cells} / ${NLat*NLon}`;
+  document.getElementById('nBio').textContent=bio.toFixed(0);
+  document.getElementById('nPeak').textContent= bandBest.v>0.5? bandBest.lat : '尚无生命';
+}
+let last=0, daysPerSec=40;
+function loop(ts){
+  if(playing){ const dt=(ts-last)/1000; last=ts; const adv=Math.max(1,Math.round(dt*daysPerSec));
+    for(let k=0;k<adv;k++){ stepDay(day%YEAR); if(day%LIFE_STEP===0) stepLife(LIFE_STEP); if(day%GEO_STEP===0) stepGeo(); day++; }
+  } else last=ts;
+  draw(); updatePanel(); requestAnimationFrame(loop);
+}
+
+// ====================== 控件 ======================
+const VIEWS=[['life','生命'],['temp','气温带'],['prec','降水'],['sst','海温']];
+const vbox=document.getElementById('views');
+VIEWS.forEach(([k,label])=>{ const b=document.createElement('button'); b.textContent=label; b.dataset.v=k; if(k==='life')b.classList.add('on');
+  b.onclick=()=>{ view=k; [...vbox.children].forEach(c=>c.classList.toggle('on',c.dataset.v===k)); setLegend(); }; vbox.appendChild(b); });
+function setLegend(){
+  const bar=document.getElementById('lgBar'), lo=document.getElementById('lgLo'), hi=document.getElementById('lgHi');
+  let stops,a,b;
+  if(view==='life'){stops=LIFEC;a='无生命';b='繁茂';}
+  else if(view==='temp'||view==='sst'){stops=TEMP;a='-40°C';b='+40°C';}
+  else {stops=PREC;a='干';b='多雨';}
+  bar.style.background=`linear-gradient(90deg,${stops.map(c=>rgb(c)).join(',')})`; lo.textContent=a; hi.textContent=b;
+}
+document.getElementById('play').onclick=function(){ playing=!playing; this.textContent=playing?'⏸ 暂停':'▶ 播放'; this.classList.toggle('on',playing); };
+document.getElementById('reset').onclick=()=>{ spinUp(); };
+document.getElementById('spd').oninput=function(){ daysPerSec=+this.value; document.getElementById('spdv').textContent=`${daysPerSec} 天/秒`; };
+['ckWind','ckBelt'].forEach(id=>document.getElementById(id).onchange=draw);
+document.getElementById('ckOcean').onchange=function(){ WATERWORLD=this.checked; spinUp(); };
+document.getElementById('spdv').textContent='40 天/秒';
+setLegend(); spinUp(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
