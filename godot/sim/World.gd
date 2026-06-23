@@ -131,6 +131,20 @@ const iceRelax := 0.15    # 冰量弛豫率
 const seaK := 0.005       # 冰量偏离→海平面偏移(高程单位)
 const SEA_BASE := 0.82    # geo 缺省时的海平面基准
 
+# ---------- 33 元素化学底物(从 world.html;全球网格版,逐元素守恒)----------
+const NE := 33
+const MN := ["钠","钙","镁","钾","铁","氯","硫酸盐","碳酸盐","硅","铜","碘","锌","锡","铅","银","金","硫","碳","硝","磷","汞","硼","氟","铀","钍","铝","锰","钛","镍","铬","钼","钴","硒"]
+const SEAREF := [3000.0,110.0,360.0,110.0,0.5,5390.0,750.0,30.0,1.0,0.1,20.0,0.5,0.0,0.0,0.0,0.0,2.0,0.0,5.0,0.1,0.0,5.0,1.0,3.3,0.0,0.0,0.0,0.0,0.5,0.2,10.0,0.0,0.1]  # 海水本底谱
+const ESOL := [8.0,0.4,2.0,3.0,0.05,9.0,1.2,0.6,0.08,0.03,12.0,0.2,0.002,0.004,0.003,0.0005,0.5,0.1,10.0,0.05,0.001,1.5,0.8,0.01,0.0002,0.001,0.3,0.0005,0.05,0.02,0.4,0.05,0.3]  # 溶解度上限
+const EREL := [0.05,0.30,0.40,0.05,0.35,0.02,0.08,0.15,0.20,0.30,0.0,0.15,0.01,0.02,0.01,0.005,0.30,0.0,0.0,0.15,0.08,0.0,0.03,0.01,0.02,0.20,0.20,0.30,0.25,0.30,0.0,0.20,0.02]  # 风化释放谱(玄武岩/平均洋壳)
+const WK := 0.0006        # 风化基率
+const E_BURY := 5e-4      # 海洋埋藏率(对超本底)
+const E_RETURN := 0.03    # 俯冲池→火山返还(每地质年)
+var disE := PackedFloat64Array()    # 各格溶解元素,索引 k*NE+e
+var depE := PackedFloat64Array()    # 各格沉积元素
+var subPoolE := PackedFloat64Array()  # 俯冲池(全局,NE)
+var rockE := PackedFloat64Array()     # 岩石/地幔元素源(全局,NE)
+
 var globalCO2 := 2.0
 const CO2ref := 2.0
 const cGhouse := 2.2
@@ -567,6 +581,39 @@ func carbonStep() -> void:
 	atmN2 -= fix; availN += fix
 	var den := denitGK * availN * anox; availN -= den; atmN2 += den
 
+func elementStep() -> void:   # 33 元素:风化(岩→溶)→溶解度沉淀(溶→沉)→海洋埋藏(溶→俯冲)→火山返还。逐元素守恒
+	var cf: float = max(0.1, globalCO2 / CO2ref)
+	for j in NLat:
+		var jb := j * NLon
+		for i in NLon:
+			var k := jb + i
+			var base := k * NE
+			var water: float = (P[k] if Land[k] != 0 else 1.0)
+			if Land[k] != 0:
+				var act: float = clampf(water, 0.0, 1.0) * clampf((T[k] + 5.0) / 25.0, 0.0, 1.5) * cf
+				for e in NE:
+					var rel: float = min(WK * float(EREL[e]) * act, rockE[e])
+					rockE[e] -= rel; disE[base + e] += rel
+			var wcap: float = max(0.05, water)
+			for e in NE:
+				var cap: float = float(ESOL[e]) * wcap
+				var d: float = disE[base + e]
+				if d > cap and Land[k] != 0:   # 溶解度沉淀只在陆地/蒸发,海洋靠埋藏稳在 SEAREF
+					var pp: float = (d - cap) * 0.2
+					disE[base + e] = d - pp; depE[base + e] += pp
+			if Land[k] == 0:
+				for e in NE:
+					var exc: float = disE[base + e] - float(SEAREF[e])
+					if exc > 0.0:
+						var b: float = E_BURY * exc
+						disE[base + e] -= b; subPoolE[e] += b
+	for e in NE:                       # 俯冲池→火山返还(分摊各格溶解,守恒)
+		var ret: float = E_RETURN * subPoolE[e]
+		if ret <= 0.0: continue
+		subPoolE[e] -= ret
+		var per: float = ret / SZ
+		for k in SZ: disE[k * NE + e] += per
+
 func effSea() -> float:                       # 当前有效海平面阈值(高程单位)
 	return (geo.SEA if geo != null else SEA_BASE) + seaOffset
 func _seaStep() -> void:                       # 冰量↔海平面,守恒;冰多→海退→重算海陆
@@ -590,6 +637,7 @@ func stepGeo() -> void:
 			rockC -= pulse; globalCO2 += pulse
 	_seaStep()
 	carbonStep()
+	elementStep()
 	massExtinctionCheck(updateSpecies())
 	_track_events()
 
@@ -632,4 +680,11 @@ func spinUp() -> void:
 	MOC = 1.0; geoT = 0; climCool = 0.0; globalCO2 = 2.0
 	iceVol = 0.0; refIce = -1.0; seaOffset = 0.0
 	ocnC = 2.0; fosC = 0.0; rockC = 10000.0; globalO2 = 0.0; globalRed = 4.0; atmN2 = 1000.0; availN = 2.0
+	disE = PackedFloat64Array(); disE.resize(SZ * NE)
+	depE = PackedFloat64Array(); depE.resize(SZ * NE)
+	subPoolE = PackedFloat64Array(); subPoolE.resize(NE)
+	rockE = PackedFloat64Array(); rockE.resize(NE); rockE.fill(100000.0)
+	for k in SZ:
+		if Land[k] == 0:
+			for e in NE: disE[k * NE + e] = float(SEAREF[e])
 	for d in 3 * YEAR: stepDay(d % YEAR)

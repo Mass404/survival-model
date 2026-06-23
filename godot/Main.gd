@@ -315,6 +315,13 @@ func _update_inspect() -> void:
 		s += "\n营养级 → 食草 %.1f · 食肉 %.1f" % [w.H[k], w.C[k]]
 	if w.N[k] > Sim.SEED and (w.rSex[k] > 0.05 or w.Par[k] > Sim.SEED):
 		s += "\n有性 %.0f%% · 寄生载量 %.1f" % [w.rSex[k] * 100.0, w.Par[k]]
+	var be := -1
+	var bv := 0.0
+	for e in Sim.NE:
+		var v: float = w.depE[k * Sim.NE + e]
+		if v > bv: bv = v; be = e
+	if be >= 0 and bv > 0.5:
+		s += "\n富集矿 → %s %.1f" % [w.MN[be], bv]
 	inspect_label.text = s
 
 func _update_events() -> void:
