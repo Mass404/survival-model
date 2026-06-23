@@ -78,8 +78,8 @@ func _sample(field, lat: float, lon: float) -> float:
 	var ti := xi - i0
 	i0 = ((i0 % Sim.NLon) + Sim.NLon) % Sim.NLon
 	var i1 := (i0 + 1) % Sim.NLon
-	var a := lerpf(field[j0][i0], field[j0][i1], ti)
-	var b := lerpf(field[j1][i0], field[j1][i1], ti)
+	var a := lerpf(field[j0 * Sim.NLon + i0], field[j0 * Sim.NLon + i1], ti)
+	var b := lerpf(field[j1 * Sim.NLon + i0], field[j1 * Sim.NLon + i1], ti)
 	return lerpf(a, b, tj)
 
 func _nearest(lat: float, lon: float) -> Vector2i:
@@ -158,8 +158,9 @@ func _cell_color(idx: int) -> Color:
 		return _tcol(_sample(world.Topt, lat, lon))
 	if view == "species":
 		var c := _nearest(lat, lon)
-		if world.N[c.x][c.y] < Sim.SEED or world.spId[c.x][c.y] < 1: return Color8(16,20,28)
-		return _sp_color(world.spId[c.x][c.y])
+		var ck: int = c.x * Sim.NLon + c.y
+		if world.N[ck] < Sim.SEED or world.spId[ck] < 1: return Color8(16,20,28)
+		return _sp_color(world.spId[ck])
 	if view == "temp": return _tcol(_sample(world.T, lat, lon))
 	if view == "prec": return _ramp(PREC, _sample(world.P, lat, lon) / 1.2)
 	if view == "sst": return Color8(22,28,46) if land else _tcol(_sample(world.S, lat, lon))

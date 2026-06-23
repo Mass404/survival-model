@@ -25,8 +25,7 @@ func _initialize() -> void:
 
 	var cells := _alive_cells(w)
 	var bio := 0.0
-	for j in Sim.NLat:
-		for i in Sim.NLon: bio += w.N[j][i]
+	for k in Sim.SZ: bio += w.N[k]
 	var alive_now = w.phylo.filter(func(p): return p["deathY"] < 0).size()
 
 	print("================ Evolve 内核 headless 验证 ================")
@@ -48,18 +47,17 @@ func _initialize() -> void:
 
 func _alive_cells(w) -> int:
 	var c := 0
-	for j in Sim.NLat:
-		for i in Sim.NLon:
-			if w.N[j][i] > Sim.SEED: c += 1
+	for k in Sim.SZ:
+		if w.N[k] > Sim.SEED: c += 1
 	return c
 
 func _dominant_morph(w) -> String:
 	var bp := {}
 	for j in Sim.NLat:
 		for i in Sim.NLon:
-			if w.N[j][i] > Sim.SEED:
+			if w.N[j * Sim.NLon + i] > Sim.SEED:
 				var k = w.bodyPlan(j, i)
-				bp[k] = bp.get(k, 0.0) + w.N[j][i]
+				bp[k] = bp.get(k, 0.0) + w.N[j * Sim.NLon + i]
 	var best := ""
 	var bv := -1.0
 	for k in bp:

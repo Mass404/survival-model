@@ -42,10 +42,9 @@ func _initialize() -> void:
 		day += 1
 	var cells := 0
 	var bio := 0.0
-	for j in Sim.NLat:
-		for i in Sim.NLon:
-			if w.N[j][i] > Sim.SEED: cells += 1
-			bio += w.N[j][i]
+	for k in Sim.SZ:
+		if w.N[k] > Sim.SEED: cells += 1
+		bio += w.N[k]
 	var alive = w.phylo.filter(func(p): return p["deathY"] < 0).size()
 	print("跑 30 年后:占据格 %d/%d,生物量 %.0f,现存种 %d,大灭绝 %d 次" % [cells, Sim.NLat * Sim.NLon, bio, alive, w.massExt.size()])
 	var ok: bool = lw / tw > 0.15 and lw / tw < 0.5 and cells > 0 and alive > 0

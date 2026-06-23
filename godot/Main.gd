@@ -282,9 +282,10 @@ func _on_ocean(on: bool) -> void:
 # ---- 探查 / 事件面板 ----
 func _biome_name(j: int, i: int) -> String:
 	var w = world
-	if not w.Land[j][i]: return "海洋"
+	var k := j * Sim.NLon + i
+	if w.Land[k] == 0: return "海洋"
 	var tt: float = w.Teff(j, i)
-	var pp: float = w.P[j][i]
+	var pp: float = w.P[k]
 	if tt < -2.0: return "冰原"
 	if tt < 6.0: return "针叶林"
 	if pp < 0.3: return "沙漠"
@@ -299,11 +300,12 @@ func _update_inspect() -> void:
 	var w = world
 	var j := sel.x
 	var i := sel.y
+	var k := j * Sim.NLon + i
 	var lat := int(w.latof(j))
-	var place: String = "陆地 · " + _biome_name(j, i) if w.Land[j][i] else "海洋"
-	var s := "%d° · %s\n温度 %.1f℃ · 降水 %.2f\n生物量 %.1f / %d" % [lat, place, w.Teff(j, i), w.P[j][i], w.N[j][i], int(Sim.Kmax)]
-	if w.N[j][i] > Sim.SEED and w.spId[j][i] > 0:
-		s += "\n物种 #%d · 最适温 %.0f℃ · %s门" % [w.spId[j][i], w.Topt[j][i], w.bodyPlan(j, i)]
+	var place: String = ("陆地 · " + _biome_name(j, i)) if w.Land[k] != 0 else "海洋"
+	var s := "%d° · %s\n温度 %.1f℃ · 降水 %.2f\n生物量 %.1f / %d" % [lat, place, w.Teff(j, i), w.P[k], w.N[k], int(Sim.Kmax)]
+	if w.N[k] > Sim.SEED and w.spId[k] > 0:
+		s += "\n物种 #%d · 最适温 %.0f℃ · %s门" % [w.spId[k], w.Topt[k], w.bodyPlan(j, i)]
 	else:
 		s += "\n(此处无生命)"
 	inspect_label.text = s
@@ -340,10 +342,12 @@ func _update_panel() -> void:
 	var best_v := -1.0
 	for j in Sim.NLat:
 		var bs := 0.0
+		var jb := j * Sim.NLon
 		for i in Sim.NLon:
-			if w.N[j][i] > Sim.SEED: cells += 1
-			bio += w.N[j][i]
-			bs += w.N[j][i]
+			var nv: float = w.N[jb + i]
+			if nv > Sim.SEED: cells += 1
+			bio += nv
+			bs += nv
 		if bs / Sim.NLon > best_v:
 			best_v = bs / Sim.NLon
 			best_lat = "%d°" % int(w.latof(j))
@@ -358,10 +362,12 @@ func _update_panel() -> void:
 		kv["mass"].text = "0"
 	var bp := {}
 	for j in Sim.NLat:
+		var jb := j * Sim.NLon
 		for i in Sim.NLon:
-			if w.N[j][i] > Sim.SEED:
+			var nv: float = w.N[jb + i]
+			if nv > Sim.SEED:
 				var b = w.bodyPlan(j, i)
-				bp[b] = bp.get(b, 0.0) + w.N[j][i]
+				bp[b] = bp.get(b, 0.0) + nv
 	var ent := bp.keys()
 	ent.sort_custom(func(a, b): return bp[a] > bp[b])
 	if ent.size() > 0:
