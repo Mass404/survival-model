@@ -17,6 +17,8 @@ var _plat := PackedFloat32Array()
 var _plon := PackedFloat32Array()
 var _W := GeoS.COLS
 var _H := GeoS.ROWS
+var selected := Vector2i(-1, -1)   # 选中的粗格 (j,i)
+var on_pick: Callable              # Main 注入:点击回调(j,i)
 
 # 分析视图色带
 const TEMP := [Color8(20,40,120), Color8(40,120,200), Color8(90,190,220), Color8(120,200,150), Color8(235,220,120), Color8(235,150,60), Color8(200,50,40)]
@@ -39,9 +41,7 @@ const MTNSNOW := Color8(208,214,222)
 const ICE := Color8(223,234,245)
 
 func setup(w, g) -> void:
-	world = w
 	geo = g
-	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_img = Image.create(_W, _H, false, Image.FORMAT_RGB8)
 	_tex = ImageTexture.create_from_image(_img)
 	var sz := _W * _H
@@ -52,6 +52,19 @@ func setup(w, g) -> void:
 			var idx := gy * _W + gx
 			_plat[idx] = lat
 			_plon[idx] = (gx + 0.5) * 360.0 / _W
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	world = w   # 最后设 → refresh/_draw 的 "world==null" 守卫真正兜住未就绪状态
+
+func _gui_input(ev: InputEvent) -> void:
+	if ev is InputEventMouseButton and ev.pressed and ev.button_index == MOUSE_BUTTON_LEFT:
+		var lon := clampf(ev.position.x / size.x, 0.0, 0.999) * 360.0
+		var lat := 90.0 - clampf(ev.position.y / size.y, 0.0, 0.999) * 180.0
+		var j := clampi(int((lat + 90.0) / 180.0 * Sim.NLat), 0, Sim.NLat - 1)
+		var i := ((int(lon / 360.0 * Sim.NLon)) % Sim.NLon + Sim.NLon) % Sim.NLon
+		selected = Vector2i(j, i)
+		if on_pick.is_valid(): on_pick.call(j, i)
+		queue_redraw()
 
 # ---------- 采样 / 工具 ----------
 func _sample(field, lat: float, lon: float) -> float:
@@ -189,6 +202,15 @@ func _draw() -> void:
 		draw_line(Vector2(0, y), Vector2(W, y), Color(1,1,1,0.09), 1.0)
 		var lbl: String = (str(L) + "°N") if L > 0 else ((str(-L) + "°S") if L < 0 else "赤道")
 		draw_string(ThemeDB.fallback_font, Vector2(4, y - 3), lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(1,1,1,0.5))
+	# 选中粗格高亮框
+	if selected.x >= 0:
+		var j := selected.x
+		var i := selected.y
+		var xl := float(i) / Sim.NLon * W
+		var xr := float(i + 1) / Sim.NLon * W
+		var yt := (90.0 - (-90.0 + (j + 1) * 180.0 / Sim.NLat)) / 180.0 * H
+		var yb := (90.0 - (-90.0 + j * 180.0 / Sim.NLat)) / 180.0 * H
+		draw_rect(Rect2(xl, yt, xr - xl, yb - yt), Color(1, 1, 0.4, 0.95), false, 2.0)
 
 func _arrow(x1: float, y1: float, x2: float, y2: float) -> void:
 	var c := Color(1,1,1,0.6)

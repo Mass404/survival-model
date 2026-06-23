@@ -3,6 +3,7 @@ extends Control
 const Sim = preload("res://sim/World.gd")
 const GeoS = preload("res://sim/Geo.gd")
 const CanvasViewS = preload("res://CanvasView.gd")
+const PhyloViewS = preload("res://PhyloView.gd")
 
 const LIFE_STEP := 10
 const GEO_STEP := 365
@@ -22,6 +23,14 @@ var view_buttons := {}
 var play_btn: Button
 var spd_label: Label
 var kv := {}   # 生命面板数值 Label
+var phylo_view   # PhyloView
+var inspect_label: Label
+var events_label: Label
+var _ui_accum := 0
+# 时间摄像机:跳到下一事件
+var _seek := false
+var _seek_from := 0
+var _seek_start_year := 0
 
 func _ready() -> void:
 	geo = GeoS.new()
@@ -31,21 +40,35 @@ func _ready() -> void:
 	world.spinUp()
 	_build_ui()
 	canvas.setup(world, geo)
+	canvas.on_pick = _on_pick
+	phylo_view.setup(world)
 	canvas.refresh()
+	phylo_view.refresh()
 
 func _process(delta: float) -> void:
 	if playing:
-		var adv: int = max(1, int(round(delta * days_per_sec)))
+		var adv: int = 8 if _seek else max(1, int(round(delta * days_per_sec)))   # 快进时定速推(避免卡帧)
 		for k in adv:
 			world.stepDay(day % Sim.YEAR)
 			if day % LIFE_STEP == 0: world.stepLife(LIFE_STEP)
 			if day % GEO_STEP == 0: world.stepGeo()
 			day += 1
 		_redraw_accum += 1
-		if _redraw_accum >= 3:                   # 像素地球重绘节流(演化慢,~20Hz 足够)
+		if _redraw_accum >= 3:                   # 像素地球/谱系树重绘节流(演化慢,~20Hz 足够)
 			_redraw_accum = 0
 			canvas.refresh()
-	_update_panel()
+			phylo_view.refresh()
+		if _seek and (world.events.size() > _seek_from or world.geoT - _seek_start_year > 25):
+			_seek = false                        # 到事件或封顶 → 停下让玩家看
+			playing = false
+			play_btn.text = "▶ 播放"
+			canvas.refresh(); phylo_view.refresh()
+	_ui_accum += 1
+	if _ui_accum >= 6:
+		_ui_accum = 0
+		_update_panel()
+		_update_events()
+		_update_inspect()
 
 # ====================== UI 搭建 ======================
 func _build_ui() -> void:
@@ -82,10 +105,14 @@ func _build_ui() -> void:
 	left.add_child(canvas)
 
 	var hint := Label.new()
-	hint.text = "气候=每天 · 生命=每旬(10天) · 地质=每年 —— 各按自己的速度推进"
+	hint.text = "气候=每天 · 生命=每旬(10天) · 地质=每年 · 点格子看详情"
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.add_theme_color_override("font_color", Color8(138, 150, 179))
 	left.add_child(hint)
+
+	phylo_view = PhyloViewS.new()
+	phylo_view.custom_minimum_size = Vector2(720, 200)
+	left.add_child(phylo_view)
 
 	# ---- 右:控件面板 ----
 	var side := VBoxContainer.new()
@@ -96,6 +123,8 @@ func _build_ui() -> void:
 	side.add_child(_card("视图", _build_views()))
 	side.add_child(_card("时间(多尺度)", _build_time()))
 	side.add_child(_card("🌱 生命", _build_life()))
+	side.add_child(_card("🔍 探查(点格子)", _build_inspect()))
+	side.add_child(_card("📜 演化事件", _build_events()))
 
 func _card(title: String, body: Control) -> Control:
 	var panel := PanelContainer.new()
@@ -155,6 +184,10 @@ func _build_time() -> Control:
 	reset.text = "↺ 重置"
 	reset.pressed.connect(_on_reset)
 	row.add_child(reset)
+	var seek := Button.new()
+	seek.text = "⏭ 下一事件"
+	seek.pressed.connect(_on_seek)
+	row.add_child(seek)
 	box.add_child(row)
 	var srow := HBoxContainer.new()
 	var sl := Label.new()
@@ -187,7 +220,35 @@ func _build_life() -> Control:
 		box.add_child(row)
 	return box
 
+func _build_inspect() -> Control:
+	inspect_label = Label.new()
+	inspect_label.text = "点地图上任意格子看那里的物种 / 温度 / 群系 / 生物量。"
+	inspect_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	inspect_label.custom_minimum_size = Vector2(0, 96)
+	inspect_label.add_theme_font_size_override("font_size", 12)
+	inspect_label.add_theme_color_override("font_color", Color8(210, 220, 240))
+	return inspect_label
+
+func _build_events() -> Control:
+	events_label = Label.new()
+	events_label.text = "—"
+	events_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	events_label.custom_minimum_size = Vector2(0, 120)
+	events_label.add_theme_font_size_override("font_size", 12)
+	events_label.add_theme_color_override("font_color", Color8(200, 210, 230))
+	return events_label
+
 # ====================== 回调 ======================
+func _on_seek() -> void:   # 时间摄像机:快进直到下一个大事件(或封顶 25 年)
+	_seek = true
+	_seek_from = world.events.size()
+	_seek_start_year = world.geoT
+	playing = true
+	play_btn.text = "⏸ 暂停"
+
+func _on_pick(j: int, i: int) -> void:
+	_update_inspect()
+
 func _on_view(v: String) -> void:
 	canvas.view = v
 	for k in view_buttons: view_buttons[k].button_pressed = (k == v)
@@ -200,7 +261,10 @@ func _on_play() -> void:
 func _on_reset() -> void:
 	world.spinUp()
 	day = 0
+	_seek = false
+	canvas.selected = Vector2i(-1, -1)
 	canvas.refresh()
+	phylo_view.refresh()
 
 func _on_speed(v: float) -> void:
 	days_per_sec = v
@@ -210,7 +274,53 @@ func _on_ocean(on: bool) -> void:
 	world.WATERWORLD = on
 	world.spinUp()
 	day = 0
+	_seek = false
+	canvas.selected = Vector2i(-1, -1)
 	canvas.refresh()
+	phylo_view.refresh()
+
+# ---- 探查 / 事件面板 ----
+func _biome_name(j: int, i: int) -> String:
+	var w = world
+	if not w.Land[j][i]: return "海洋"
+	var tt: float = w.Teff(j, i)
+	var pp: float = w.P[j][i]
+	if tt < -2.0: return "冰原"
+	if tt < 6.0: return "针叶林"
+	if pp < 0.3: return "沙漠"
+	if tt > 22.0 and pp > 0.7: return "雨林"
+	return "草原" if pp < 0.5 else "温带林"
+
+func _update_inspect() -> void:
+	if inspect_label == null: return
+	var sel: Vector2i = canvas.selected
+	if sel.x < 0:
+		return
+	var w = world
+	var j := sel.x
+	var i := sel.y
+	var lat := int(w.latof(j))
+	var place: String = "陆地 · " + _biome_name(j, i) if w.Land[j][i] else "海洋"
+	var s := "%d° · %s\n温度 %.1f℃ · 降水 %.2f\n生物量 %.1f / %d" % [lat, place, w.Teff(j, i), w.P[j][i], w.N[j][i], int(Sim.Kmax)]
+	if w.N[j][i] > Sim.SEED and w.spId[j][i] > 0:
+		s += "\n物种 #%d · 最适温 %.0f℃ · %s门" % [w.spId[j][i], w.Topt[j][i], w.bodyPlan(j, i)]
+	else:
+		s += "\n(此处无生命)"
+	inspect_label.text = s
+
+func _update_events() -> void:
+	if events_label == null: return
+	var ev = world.events
+	if ev.is_empty():
+		events_label.text = "(尚无大事件)"
+		return
+	var lines := PackedStringArray()
+	var n: int = ev.size()
+	var start: int = max(0, n - 7)
+	for k in range(n - 1, start - 1, -1):
+		var e = ev[k]
+		lines.append("%s 第%d年 · %s" % [e["icon"], e["ky"], e["text"]])
+	events_label.text = "\n".join(lines)
 
 # ====================== 面板刷新 ======================
 func _season(d: int) -> String:

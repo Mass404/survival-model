@@ -64,6 +64,11 @@ var nextSp := 1
 var extEMA := 1.0
 var massExt := []        # 大灭绝事件:{ky,lost,cause}
 
+var events := []         # 演化事件流:{ky,icon,text} —— 供事件面板 + "跳到下一事件"
+var _seen_life := false
+var _in_ice := false
+var _in_warm := false
+
 const SEED := 0.05
 const IGNITE := 0.45
 const Kmax := 40.0
@@ -310,8 +315,10 @@ func massExtinctionCheck(ext: int) -> void:
 	var thr: float = max(max(2.0, alive * 0.3), extEMA * 2.2)
 	var last: float = massExt[-1]["ky"] if massExt.size() > 0 else -1e9
 	if ext > thr and geoT > 1 and (geoT - last) >= ICE_PERIOD * 0.4:
-		massExt.append({"ky": geoT, "lost": ext, "cause": extinctionCause()})
+		var cause := extinctionCause()
+		massExt.append({"ky": geoT, "lost": ext, "cause": cause})
 		if massExt.size() > 40: massExt.pop_front()
+		_push_event("💀", "大灭绝 · %s · 损 %d 种" % [cause, ext])
 	extEMA += 0.12 * (ext - extEMA)
 
 func updateSpecies() -> int:
@@ -399,6 +406,26 @@ func stepGeo() -> void:
 	climCool = ICE_AMP * clampf(sin(2.0 * PI * geoT / ICE_PERIOD), 0.0, 1.0)
 	carbonStep()
 	massExtinctionCheck(updateSpecies())
+	_track_events()
+
+func _push_event(icon: String, text: String) -> void:
+	events.append({"ky": geoT, "icon": icon, "text": text})
+	if events.size() > 200: events.pop_front()
+
+func _track_events() -> void:   # 地质年尺度的"大事件"探测(状态跨阈才记一次)
+	if not _seen_life:
+		var any := false
+		for j in NLat:
+			for i in NLon:
+				if N[j][i] > SEED: any = true
+			if any: break
+		if any: _seen_life = true; _push_event("🌱", "生命起源")
+	var ice_now := climCool > 6.0
+	if ice_now and not _in_ice: _push_event("❄️", "冰期降临")
+	_in_ice = ice_now
+	var warm_now := globalCO2 > CO2ref * 1.8
+	if warm_now and not _in_warm: _push_event("🌋", "暖室期开始")
+	_in_warm = warm_now
 
 # ---------- 体制(门级)从形态变量涌现 —— 供面板 ----------
 func bodyPlan(j: int, i: int) -> String:
@@ -415,5 +442,6 @@ func spinUp() -> void:
 	N = grid(0.0); Hab = grid(0.0); Topt = grid(0.0); Salt = grid(0.0); Dry = grid(0.0)
 	spId = grid(0); Sym = grid(0.0); Seg = grid(0.0); Limb = grid(0.0); Axis = grid(0.0)
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
+	events = []; _seen_life = false; _in_ice = false; _in_warm = false
 	MOC = 1.0; geoT = 0; climCool = 0.0; globalCO2 = 2.0
 	for d in 3 * YEAR: stepDay(d % YEAR)
