@@ -36,6 +36,7 @@ func _ready() -> void:
 	geo = GeoS.new()
 	geo.generate()                              # 程序化真大陆(确定性,同一颗星球)
 	world = Sim.new()
+	world.geo = geo                                          # 冰川性海平面要据高程重算海陆
 	world.land_mask = geo.coarse_land(Sim.NLat, Sim.NLon)   # 海陆从高程图降采样
 	world.spinUp()
 	_build_ui()
@@ -336,6 +337,8 @@ func _update_panel() -> void:
 	var ext := ""
 	if w.climCool > 5.0: ext += " · ❄️冰期"
 	if w.globalCO2 > Sim.CO2ref * 1.8: ext += " · 🌋暖室"
+	var sl: float = w.seaOffset * 2000.0
+	if abs(sl) > 3.0: ext += " · 🌊海平面%+.0fm" % sl
 	clock_label.text = "地质 %d 年 · 第 %d 天 · %s%s · CO₂%.1f" % [w.geoT, day % Sim.YEAR, _season(day % Sim.YEAR), ext, w.globalCO2]
 
 	var cells := 0

@@ -109,6 +109,16 @@ var climCool := 0.0
 const ICE_AMP := 22.0
 const ICE_PERIOD := 14
 
+# 冰川性海平面:全球冰量当存量(随冷积/随暖融)↔海洋体积,守恒(水在冰↔洋)。冰多→海退→陆扩
+var geo = null            # Geo 注入:为 null 时海平面静态(不重算海陆)
+var iceVol := 0.0
+var refIce := -1.0        # 基准冰量(首年捕获)
+var seaOffset := 0.0      # 海平面对高程阈值的偏移(冰多→负→海退)
+const iceAccK := 1.0      # climCool→冰量目标
+const iceRelax := 0.15    # 冰量弛豫率
+const seaK := 0.005       # 冰量偏离→海平面偏移(高程单位)
+const SEA_BASE := 0.82    # geo 缺省时的海平面基准
+
 var globalCO2 := 2.0
 const CO2ref := 2.0
 const cGhouse := 2.2
@@ -526,9 +536,23 @@ func carbonStep() -> void:
 	atmN2 -= fix; availN += fix
 	var den := denitGK * availN * anox; availN -= den; atmN2 += den
 
+func effSea() -> float:                       # 当前有效海平面阈值(高程单位)
+	return (geo.SEA if geo != null else SEA_BASE) + seaOffset
+func _seaStep() -> void:                       # 冰量↔海平面,守恒;冰多→海退→重算海陆
+	var target := iceAccK * climCool
+	iceVol += iceRelax * (target - iceVol)
+	if refIce < 0.0: refIce = iceVol
+	seaOffset = -seaK * (iceVol - refIce)
+	if geo != null:
+		var m = geo.coarse_land_at(NLat, NLon, effSea())
+		for j in NLat:
+			var jb := j * NLon
+			for i in NLon: Land[jb + i] = 1 if m[j][i] else 0
+
 func stepGeo() -> void:
 	geoT += 1
 	climCool = ICE_AMP * clampf(sin(2.0 * PI * geoT / ICE_PERIOD), 0.0, 1.0)
+	_seaStep()
 	carbonStep()
 	massExtinctionCheck(updateSpecies())
 	_track_events()
@@ -569,5 +593,6 @@ func spinUp() -> void:
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
 	MOC = 1.0; geoT = 0; climCool = 0.0; globalCO2 = 2.0
+	iceVol = 0.0; refIce = -1.0; seaOffset = 0.0
 	ocnC = 2.0; fosC = 0.0; rockC = 10000.0; globalO2 = 0.0; globalRed = 4.0; atmN2 = 1000.0; availN = 2.0
 	for d in 3 * YEAR: stepDay(d % YEAR)

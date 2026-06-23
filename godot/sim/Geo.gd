@@ -89,8 +89,8 @@ func elev_at(lat: float, lon: float) -> float:
 func is_land(lat: float, lon: float) -> bool:
 	return elev_at(lat, lon) > SEA
 
-# 降采样成 sim 的粗海陆 mask:每个粗格 3×3 子样多数表决
-func coarse_land(nlat: int, nlon: int) -> Array:
+# 降采样成 sim 的粗海陆 mask(在给定海平面阈值 sea 下):每个粗格 3×3 子样多数表决
+func coarse_land_at(nlat: int, nlon: int, sea: float) -> Array:
 	var mask := []
 	for j in nlat:
 		var row := []
@@ -102,7 +102,10 @@ func coarse_land(nlat: int, nlon: int) -> Array:
 				for si in [-0.3, 0.0, 0.3]:
 					var la: float = clampf(clat + sj * 180.0 / nlat, -89.9, 89.9)
 					var lo: float = clampf(clon + si * 360.0 / nlon, 0.0, 359.9)
-					if is_land(la, lo): cnt += 1
+					if elev_at(la, lo) > sea: cnt += 1
 			row.append(cnt >= 5)
 		mask.append(row)
 	return mask
+
+func coarse_land(nlat: int, nlon: int) -> Array:
+	return coarse_land_at(nlat, nlon, SEA)

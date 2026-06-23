@@ -19,6 +19,7 @@ var _W := GeoS.COLS
 var _H := GeoS.ROWS
 var selected := Vector2i(-1, -1)   # 选中的粗格 (j,i)
 var on_pick: Callable              # Main 注入:点击回调(j,i)
+var _sea := 0.82                   # 当前有效海平面(每次 refresh 取 world.effSea(),冰川性海平面会动)
 
 # 分析视图色带
 const TEMP := [Color8(20,40,120), Color8(40,120,200), Color8(90,190,220), Color8(120,200,150), Color8(235,220,120), Color8(235,150,60), Color8(200,50,40)]
@@ -117,21 +118,21 @@ func _terrain_color(idx: int) -> Color:
 	var lat: float = _plat[idx]
 	var lon: float = _plon[idx]
 	var tt := _teff(_sample(world.T, lat, lon), lat)
-	if e < GeoS.SEA:                                        # 海洋:深浅 + 浪花 + 寒流 + 海冰
-		var depth := clampf((GeoS.SEA - e) / 0.7, 0.0, 1.0)
+	if e < _sea:                                        # 海洋:深浅 + 浪花 + 寒流 + 海冰
+		var depth := clampf((_sea - e) / 0.7, 0.0, 1.0)
 		var col := SHALLOW.lerp(DEEP, depth)
 		if depth < 0.06: col = SURF.lerp(col, depth / 0.06)
 		col = col.lerp(COLD_OCEAN, clampf((12.0 - tt) / 40.0, 0.0, 0.45))
 		var icef := clampf((-tt - 1.0) / 4.0, 0.0, 0.85)
 		if icef > 0.0: col = col.lerp(ICE, icef)
 		return col
-	var h := e - GeoS.SEA
+	var h := e - _sea
 	if h < 0.04:                                            # 浪花→沙滩
 		return SURF.lerp(BEACH, clampf(h / 0.04, 0.0, 1.0))
 	var pp := _sample(world.P, lat, lon)
 	var moist := clampf(0.4 + 0.55 * (pp - 0.4) + 0.35 * (geo.mnoise[idx] - 0.5), 0.0, 1.0)
 	var bio: Color
-	if e > GeoS.SEA + 0.6: bio = MTNSNOW if tt < 2.0 else MTN     # 高山裸岩/雪
+	if e > _sea + 0.6: bio = MTNSNOW if tt < 2.0 else MTN     # 高山裸岩/雪
 	elif tt < 6.0: bio = TAIGA
 	elif moist < 0.3: bio = DESERT
 	elif tt > 22.0 and moist > 0.55: bio = RAIN
@@ -148,7 +149,7 @@ func _cell_color(idx: int) -> Color:
 	if view == "terrain": return _terrain_color(idx)
 	var lat: float = _plat[idx]
 	var lon: float = _plon[idx]
-	var land: bool = geo.elev[idx] > GeoS.SEA
+	var land: bool = geo.elev[idx] > _sea
 	if view == "life":
 		var base: Color = Color8(26,34,24) if land else Color8(12,20,34)
 		var v := clampf(_sample(world.N, lat, lon) / Sim.Kmax, 0.0, 1.0)
@@ -174,6 +175,7 @@ func _cell_color(idx: int) -> Color:
 
 func refresh() -> void:
 	if world == null: return
+	_sea = world.effSea()
 	for gy in _H:
 		var row := gy * _W
 		for gx in _W:
