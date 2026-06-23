@@ -1,0 +1,5 @@
+# Godot 4+ 导入缓存与编辑器临时文件(不进版本库)
+.godot/
+# 导出产物
+/export/
+*.translation
