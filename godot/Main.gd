@@ -260,6 +260,8 @@ func _on_play() -> void:
 	play_btn.text = "⏸ 暂停" if playing else "▶ 播放"
 
 func _on_reset() -> void:
+	geo.generate()        # 地质被侵蚀/火山改过 → 重置回原始地形
+	geo.magmaP = 0.0; geo.hotspots = PackedInt32Array()
 	world.spinUp()
 	day = 0
 	_seek = false

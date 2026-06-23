@@ -109,3 +109,53 @@ func coarse_land_at(nlat: int, nlon: int, sea: float) -> Array:
 
 func coarse_land(nlat: int, nlon: int) -> Array:
 	return coarse_land_at(nlat, nlon, SEA)
+
+# ---------- 构造动力(逐地质年):火山热点喷发抬升(张弛)+ 侵蚀回落,确定性 ----------
+var magmaP := 0.0
+var hotspots := PackedInt32Array()
+var _eros := PackedFloat32Array()
+const ERUPT_THR := 6.0     # 岩浆压阈值(每 ~6 地质年喷一次)
+const MAGMA_RATE := 1.0
+const LAVA := 0.02         # 喷发抬升量(热点)
+const EROS_K := 0.006      # 侵蚀率(陆地高程向邻均回落)
+
+func _init_tect() -> void:
+	hotspots = PackedInt32Array()
+	for c in CORES:
+		var gx: int = clampi(int(float(c.i) / RXf * COLS), 0, COLS - 1)
+		var gy: int = clampi(int(float(c.j) / RYf * ROWS), 0, ROWS - 1)
+		hotspots.append(gy * COLS + gx)
+	_eros.resize(COLS * ROWS)
+
+func tectonics() -> int:
+	if hotspots.is_empty(): _init_tect()
+	var erupted := 0
+	magmaP += MAGMA_RATE
+	if magmaP >= ERUPT_THR:
+		magmaP = 0.0
+		for h in hotspots:
+			var hy := h / COLS
+			var hx := h % COLS
+			elev[h] += LAVA
+			for dy in [-1, 0, 1]:
+				for dx in [-1, 0, 1]:
+					if dx == 0 and dy == 0: continue
+					var ny := clampi(hy + dy, 0, ROWS - 1)
+					var nx := clampi(hx + dx, 0, COLS - 1)
+					elev[ny * COLS + nx] += LAVA * 0.35
+			erupted += 1
+	# 侵蚀:陆地高程向四邻均值回落(降 relief,确定性扩散)
+	for idx in COLS * ROWS: _eros[idx] = elev[idx]
+	for gy in ROWS:
+		for gx in COLS:
+			var idx := gy * COLS + gx
+			if _eros[idx] <= SEA: continue
+			var s := 0.0
+			var n := 0
+			for d in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+				var ny: int = gy + d[0]
+				var nx: int = gx + d[1]
+				if ny < 0 or ny >= ROWS or nx < 0 or nx >= COLS: continue
+				s += _eros[ny * COLS + nx]; n += 1
+			if n > 0: elev[idx] += EROS_K * (s / n - _eros[idx])
+	return erupted
