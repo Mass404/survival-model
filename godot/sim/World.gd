@@ -33,6 +33,7 @@ var MOC := 1.0
 var FRESH := 0.0
 var UMAX := 1.0
 var WATERWORLD := false
+var parasitesOn := true   # 可关:用于红皇后对照实验
 var land_mask = null   # Geo 注入的粗海陆 mask;null 时退回经度矩形带
 
 # ---------- 场(扁平 k=j*NLon+i) ----------
@@ -52,6 +53,8 @@ var Topt := PackedFloat64Array()
 var Salt := PackedFloat64Array()
 var Dry := PackedFloat64Array()
 var spId := PackedInt32Array()
+var rSex := PackedFloat64Array()   # 有性生殖投资(0克隆..1全有性)
+var Par := PackedFloat64Array()    # 寄生/病原载量
 var Sym := PackedFloat64Array()
 var Seg := PackedFloat64Array()
 var Limb := PackedFloat64Array()
@@ -96,6 +99,15 @@ const FW_MC := 0.05        # 食肉者死亡率
 const FW_SEEDN := 5.0      # 生产者够多→点燃食草者
 const FW_SEEDH := 2.0      # 食草者够多→点燃食肉者
 const FW_DIFF := 0.15      # 消费者扩散率
+# 有性生殖(红皇后)+ 寄生
+const SEX_K := 0.05        # rSex 演化速率
+const SEX_COST := 0.12     # 有性的双倍成本(无压力时拉回克隆)
+const SEX_BOOST := 1.5     # 有性→适应加速倍率
+const PAR_KILL := 0.25     # 寄生致死(∝宿主密度)
+const PAR_GROW := 0.4      # 载量增长(∝宿主密度×(1-有性抗性))
+const PAR_DECAY := 0.12    # 载量衰减
+const PAR_SEEDN := 3.0     # 宿主够密→寄生点燃
+const PAR_MAX := 20.0      # 载量上限(防数值爆炸)
 const rb := 0.9
 const rd := 0.12
 const MOVE := 0.12
@@ -351,9 +363,27 @@ func stepLife(dt: float) -> void:
 			var nn := N[k]
 			if r0 > 1e-6: N[k] = K / (1.0 + (K / nn - 1.0) * exp(-r0 * dt))
 			else: N[k] = max(0.0, nn * exp(r0 * dt))
-			Topt[k] += aT * (teff - Topt[k])
-			Salt[k] += aS * (es - Salt[k])
-			Dry[k] += aD * (ed - Dry[k])
+			# 有性生殖加速适应(红皇后:有性投资→适应更快)
+			var sb: float = 1.0 + SEX_BOOST * rSex[k]
+			Topt[k] += min(0.99, aT * sb) * (teff - Topt[k])
+			Salt[k] += min(0.99, aS * sb) * (es - Salt[k])
+			Dry[k] += min(0.99, aD * sb) * (ed - Dry[k])
+			# rSex 演化:复杂度门 ×(失配 + 寄生压)→升;成本拉回克隆
+			var gate := clampf(Sym[k] * 2.0, 0.0, 1.0)
+			var paraP := clampf(Par[k] / 5.0, 0.0, 1.0)
+			rSex[k] = clampf(rSex[k] + SEX_K * (gate * ((1.0 - fit) * 1.2 + paraP * 0.8) - SEX_COST), 0.0, 1.0)
+			# 寄生(载量∝宿主密度,有性抗性压制 = 红皇后):rSex=1 时完全抗性→压垮寄生
+			if parasitesOn:
+				if N[k] > PAR_SEEDN and Par[k] < SEED: Par[k] = SEED
+				if Par[k] > 0.0:
+					if N[k] > 0.1:
+						var hostD := clampf(N[k] / (N[k] + 10.0), 0.0, 1.0)
+						var resist := clampf(1.0 - rSex[k], 0.0, 1.0)
+						var kill: float = min(PAR_KILL * Par[k] * hostD * (dt / 10.0), N[k] * 0.4)
+						N[k] = N[k] - kill
+						Par[k] = clampf(Par[k] + (PAR_GROW * hostD * resist - PAR_DECAY) * Par[k] * (dt / 10.0), 0.0, PAR_MAX)
+					else:
+						Par[k] = max(0.0, Par[k] * (1.0 - PAR_DECAY * (dt / 10.0)))
 			var sizeP := clampf(N[k] / Kmax, 0.0, 1.0)
 			var gS := clampf((Sym[k] - MGATE) / MGW, 0.0, 1.0)
 			var gG := clampf((Seg[k] - MGATE) / MGW, 0.0, 1.0)
@@ -404,6 +434,7 @@ func stepLife(dt: float) -> void:
 			C[k] = max(0.0, C[k] + FW_YIELD * graze2 - FW_MC * C[k] * ds)
 	_diffuse(H, FW_DIFF * ds)
 	_diffuse(C, FW_DIFF * ds)
+	_diffuse(Par, FW_DIFF * ds)
 
 func _diffuse(F: PackedFloat64Array, rate: float) -> void:   # 四邻扩散(守恒),复用 _flow 缓冲
 	_flow.fill(0.0)
@@ -589,6 +620,7 @@ func spinUp() -> void:
 	initClimate()
 	N = gridF(0.0); H = gridF(0.0); C = gridF(0.0); Hab = gridF(0.0); Topt = gridF(0.0); Salt = gridF(0.0); Dry = gridF(0.0)
 	spId = PackedInt32Array(); spId.resize(SZ)
+	rSex = gridF(0.0); Par = gridF(0.0)
 	Sym = gridF(0.0); Seg = gridF(0.0); Limb = gridF(0.0); Axis = gridF(0.0)
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
