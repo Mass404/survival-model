@@ -106,6 +106,22 @@ const weatherK := 0.2
 const bioK := 0.1
 const VPULSE_T := 40
 const VPULSE_A := 3.0
+# —— 守恒账本(从 world.html 搬:碳 4 库闭合 + 大氧化 GOE + 氮两库)。总量只在库间搬,守恒 ——
+var ocnC: float = 2.0       # 海洋溶解碳库
+var fosC: float = 0.0       # 化石/沉积有机碳库
+var rockC: float = 10000.0  # 岩石+地幔碳库(火山源/风化汇)
+const seaExK := 0.05        # 海气碳交换率
+const buryK := 0.05         # 生物碳泵:净埋藏率(大气→化石,放等量 O₂)。温和→火山≈风化+埋藏,大气CO2自稳
+const foxCK := 0.002        # 化石出露氧化率(→大气)
+var globalO2: float = 0.0   # 大气 O₂(%)
+var globalRed: float = 4.0  # 还原缓冲库(海洋Fe²⁺/火山还原气)→压住早期 O₂,耗尽才 GOE
+const o2ResupD := 0.02      # 火山还原气补给(当场吃 O₂)
+const o2RespK := 0.02       # 净耗氧
+const redSupK := 0.01       # 还原物持续补给
+var atmN2: float = 1000.0   # 大气 N₂ 库
+var availN: float = 2.0     # 可用氮(生物可取)
+const nfixGK := 0.05        # 固氮率(N₂→可用)
+const denitGK := 0.03       # 反硝化率(可用→N₂,缺氧强)
 
 var geoT := 0
 
@@ -440,12 +456,28 @@ func updateSpecies() -> int:
 func carbonStep() -> void:
 	var bio := 0.0
 	for k in SZ: bio += N[k]
-	var ghouse := cGhouse * (globalCO2 - CO2ref)
-	var warm := clampf(1.0 + 0.06 * ghouse, 0.4, 2.5)
-	var src := volcOut + (VPULSE_A if (geoT > 0 and geoT % VPULSE_T == 0) else 0.0)
-	var weather := weatherK * (globalCO2 / CO2ref) * warm
-	var pump := bioK * clampf(bio / 5000.0, 0.0, 1.5)
-	globalCO2 = max(0.1, globalCO2 + src - weather - pump)
+	# 碳:4 库(大气 globalCO2 / 海洋 ocnC / 化石 fosC / 岩石+地幔 rockC)间只搬运,总量守恒
+	rockC -= volcOut; globalCO2 += volcOut                                       # 火山:岩石/地幔→大气
+	var pulse: float = VPULSE_A if (geoT > 0 and geoT % VPULSE_T == 0) else 0.0
+	rockC -= pulse; globalCO2 += pulse                                           # 暗色岩省脉冲(也从岩石库)
+	var tempf := clampf(1.0 + 0.06 * (globalCO2 - CO2ref), 0.4, 3.0)             # 暖→风化快(碳硅酸盐恒温器负反馈)
+	var wq: float = min(globalCO2, weatherK * (globalCO2 / CO2ref) * tempf)
+	globalCO2 -= wq; rockC += wq                                                 # 风化:大气→岩石(碳酸盐埋藏)
+	var dOcn := seaExK * (globalCO2 - ocnC); globalCO2 -= dOcn; ocnC += dOcn     # 海气交换:趋平衡
+	var bury: float = min(globalCO2, buryK * clampf(bio / 5000.0, 0.0, 2.0))
+	globalCO2 -= bury; fosC += bury                                              # 生物碳泵(∝生物量):大气→化石,放 O₂
+	var oxid := foxCK * fosC; fosC -= oxid; globalCO2 += oxid                    # 化石出露氧化:化石→大气
+	# 氧(GOE):净埋藏有机碳=放等量 O₂;先被火山还原气 + 还原缓冲库吃,库耗尽才阈值式跃升
+	var avail := bury
+	var byGas: float = min(avail, o2ResupD); avail -= byGas
+	var byRed: float = min(avail, globalRed * 0.02); avail -= byRed; globalRed = max(0.0, globalRed - byRed)
+	globalO2 = clampf(globalO2 + avail - o2RespK * globalO2, 0.0, 21.0)
+	globalRed = min(500.0, globalRed + redSupK)                                  # 火山持续补还原物
+	# 氮:固氮(N₂→可用)↔反硝化(可用→N₂,缺氧强),两库守恒
+	var anox := clampf(1.0 - globalO2 / 5.0, 0.0, 1.0)
+	var fix: float = nfixGK * clampf(bio / 5000.0, 0.0, 1.0) * clampf(1.0 - availN / 5.0, 0.0, 1.0)
+	atmN2 -= fix; availN += fix
+	var den := denitGK * availN * anox; availN -= den; atmN2 += den
 
 func stepGeo() -> void:
 	geoT += 1
@@ -490,4 +522,5 @@ func spinUp() -> void:
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
 	MOC = 1.0; geoT = 0; climCool = 0.0; globalCO2 = 2.0
+	ocnC = 2.0; fosC = 0.0; rockC = 10000.0; globalO2 = 0.0; globalRed = 4.0; atmN2 = 1000.0; availN = 2.0
 	for d in 3 * YEAR: stepDay(d % YEAR)
