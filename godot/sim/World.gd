@@ -325,7 +325,8 @@ func stepLife(dt: float) -> void:
 			var fD := exp(-pow((Dry[k] - ed) / DRYW, 2.0))
 			var fit := fT * fS * fD
 			var K: float = max(1e-3, Kmax * Hab[k])
-			var r0 := rb * Hab[k] * fit - rd
+			var aer := 1.0 + 0.18 * clampf(globalO2 / 10.0, 0.0, 1.0)
+			var r0 := rb * Hab[k] * fit * aer - rd
 			var nn := N[k]
 			if r0 > 1e-6: N[k] = K / (1.0 + (K / nn - 1.0) * exp(-r0 * dt))
 			else: N[k] = max(0.0, nn * exp(r0 * dt))
@@ -370,6 +371,7 @@ func extinctionCause() -> String:
 	if globalCO2 > CO2ref * 2.0: return "🌋暖室·海洋酸化"
 	if climCool > 12.0: return "❄️大冰期"
 	if climCool > 6.0: return "❄️冰期降温"
+	if globalO2 < 2.0: return "🅾缺氧海(O₂不足)"
 	return "环境胁迫"
 func massExtinctionCheck(ext: int) -> void:
 	var alive := phylo.filter(func(p): return p["deathY"] < 0).size()
