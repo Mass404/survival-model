@@ -44,7 +44,9 @@ var P := PackedFloat64Array()
 var U := PackedFloat64Array()
 var PR := PackedFloat64Array()
 var FR := PackedFloat64Array()
-var N := PackedFloat64Array()
+var N := PackedFloat64Array()      # 生产者生物量
+var H := PackedFloat64Array()      # 食草者(一级消费者)
+var C := PackedFloat64Array()      # 食肉者(二级消费者)
 var Hab := PackedFloat64Array()
 var Topt := PackedFloat64Array()
 var Salt := PackedFloat64Array()
@@ -85,6 +87,15 @@ var _in_warm := false
 const SEED := 0.05
 const IGNITE := 0.45
 const Kmax := 40.0
+# 食物网(Holling-II 捕食,饱和→稳定;系数按 stepLife dt=10 标定,validate 验金字塔/共存)
+const FW_HALF := 8.0       # 半饱和猎物量
+const FW_GRAZE := 0.5      # 单位捕食者最大摄食压
+const FW_YIELD := 0.25     # 营养传递效率
+const FW_MH := 0.08        # 食草者死亡率
+const FW_MC := 0.05        # 食肉者死亡率
+const FW_SEEDN := 5.0      # 生产者够多→点燃食草者
+const FW_SEEDH := 2.0      # 食草者够多→点燃食肉者
+const FW_DIFF := 0.15      # 消费者扩散率
 const rb := 0.9
 const rd := 0.12
 const MOVE := 0.12
@@ -366,6 +377,40 @@ func stepLife(dt: float) -> void:
 				Dry[k] = (Dry[k] * N[k] + _fDr[k]) / tot
 		N[k] = max(0.0, N[k] + _flow[k])
 
+	# ---------- 食物网:N(生产者)→ H(食草)→ C(食肉),Holling-II ----------
+	var ds := dt / 10.0
+	for k in SZ:
+		var nv := N[k]
+		if H[k] < SEED and nv > FW_SEEDN: H[k] = SEED
+		if H[k] > 0.0:
+			var graze: float = min(FW_GRAZE * H[k] * (nv / (nv + FW_HALF)) * ds, nv * 0.5)
+			N[k] = nv - graze
+			H[k] = max(0.0, H[k] + FW_YIELD * graze - FW_MH * H[k] * ds)
+		var hv := H[k]
+		if C[k] < SEED and hv > FW_SEEDH: C[k] = SEED
+		if C[k] > 0.0:
+			var graze2: float = min(FW_GRAZE * C[k] * (hv / (hv + FW_HALF)) * ds, hv * 0.5)
+			H[k] = hv - graze2
+			C[k] = max(0.0, C[k] + FW_YIELD * graze2 - FW_MC * C[k] * ds)
+	_diffuse(H, FW_DIFF * ds)
+	_diffuse(C, FW_DIFF * ds)
+
+func _diffuse(F: PackedFloat64Array, rate: float) -> void:   # 四邻扩散(守恒),复用 _flow 缓冲
+	_flow.fill(0.0)
+	for j in NLat:
+		var jb := j * NLon
+		for i in NLon:
+			var k := jb + i
+			var v := F[k]
+			if v <= 0.0: continue
+			var nb := [jb + (i + 1) % NLon, jb + posmod(i - 1, NLon)]
+			if j > 0: nb.append((j - 1) * NLon + i)
+			if j < NLat - 1: nb.append((j + 1) * NLon + i)
+			for bk in nb:
+				var mv: float = rate * max(0.0, (v - F[bk]) * 0.5)
+				_flow[k] -= mv; _flow[bk] += mv
+	for k in SZ: F[k] = max(0.0, F[k] + _flow[k])
+
 # ---------- 物种 / 谱系 / 大灭绝 ----------
 func extinctionCause() -> String:
 	if globalCO2 > CO2ref * 2.0: return "🌋暖室·海洋酸化"
@@ -518,7 +563,7 @@ func bodyPlan(j: int, i: int) -> String:
 # ---------- 启动:气候预热 ----------
 func spinUp() -> void:
 	initClimate()
-	N = gridF(0.0); Hab = gridF(0.0); Topt = gridF(0.0); Salt = gridF(0.0); Dry = gridF(0.0)
+	N = gridF(0.0); H = gridF(0.0); C = gridF(0.0); Hab = gridF(0.0); Topt = gridF(0.0); Salt = gridF(0.0); Dry = gridF(0.0)
 	spId = PackedInt32Array(); spId.resize(SZ)
 	Sym = gridF(0.0); Seg = gridF(0.0); Limb = gridF(0.0); Axis = gridF(0.0)
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []

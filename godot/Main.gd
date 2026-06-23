@@ -7,7 +7,7 @@ const PhyloViewS = preload("res://PhyloView.gd")
 
 const LIFE_STEP := 10
 const GEO_STEP := 365
-const VIEWS := [["terrain","地表"], ["life","生命"], ["adapt","适应(最适温)"], ["species","物种"], ["temp","气温带"], ["prec","降水"], ["sst","海温"]]
+const VIEWS := [["terrain","地表"], ["life","生命"], ["trophic","营养级"], ["adapt","适应(最适温)"], ["species","物种"], ["temp","气温带"], ["prec","降水"], ["sst","海温"]]
 const SEASONS := ["🌱春", "☀️夏", "🍂秋", "❄️冬"]
 
 var world
@@ -308,6 +308,8 @@ func _update_inspect() -> void:
 		s += "\n物种 #%d · 最适温 %.0f℃ · %s门" % [w.spId[k], w.Topt[k], w.bodyPlan(j, i)]
 	else:
 		s += "\n(此处无生命)"
+	if w.H[k] > Sim.SEED or w.C[k] > Sim.SEED:
+		s += "\n营养级 → 食草 %.1f · 食肉 %.1f" % [w.H[k], w.C[k]]
 	inspect_label.text = s
 
 func _update_events() -> void:

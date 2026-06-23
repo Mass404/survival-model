@@ -153,6 +153,12 @@ func _cell_color(idx: int) -> Color:
 		var base: Color = Color8(26,34,24) if land else Color8(12,20,34)
 		var v := clampf(_sample(world.N, lat, lon) / Sim.Kmax, 0.0, 1.0)
 		return base if v < 0.02 else _ramp(LIFEC, v)
+	if view == "trophic":
+		var nn := clampf(_sample(world.N, lat, lon) / Sim.Kmax, 0.0, 1.0)
+		if nn < 0.02: return Color8(14, 18, 26) if not land else Color8(20, 24, 18)
+		var hh := clampf(_sample(world.H, lat, lon) / 12.0, 0.0, 1.0)
+		var cc := clampf(_sample(world.C, lat, lon) / 3.0, 0.0, 1.0)
+		return Color(0.12 + 0.88 * clampf(0.55 * hh + cc, 0.0, 1.0), 0.12 + 0.78 * nn, 0.12 + 0.6 * cc)
 	if view == "adapt":
 		if _sample(world.N, lat, lon) < Sim.SEED: return Color8(16,20,28)
 		return _tcol(_sample(world.Topt, lat, lon))
