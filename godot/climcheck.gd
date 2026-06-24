@@ -6,7 +6,7 @@ const Sim = preload("res://sim/World.gd")
 func _initialize() -> void:
 	var w = Sim.new()
 	w.spinUp()
-	var c0: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC
+	var c0: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC + w.bioC
 	var day := 0
 	var cool := []          # 每年 climCool(纯冰期,不含撞击)
 	var impacts := []       # 撞击年记录
@@ -19,7 +19,7 @@ func _initialize() -> void:
 			if w.geoT % Sim.IMPACT_T == 0:
 				impacts.append({"y": w.geoT, "iw": w.impactWinter, "co2": w.globalCO2})
 		day += 1
-	var c1: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC
+	var c1: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC + w.bioC
 	print("=== 气候强迫(撞击 + 米兰科维奇)验证 ===")
 	print("撞击事件(每 %d 年一次):" % Sim.IMPACT_T)
 	for im in impacts:

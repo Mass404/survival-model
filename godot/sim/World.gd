@@ -58,6 +58,8 @@ var Salt := PackedFloat64Array()
 var Dry := PackedFloat64Array()
 var spId := PackedInt32Array()
 var rSex := PackedFloat64Array()   # 有性生殖投资(0克隆..1全有性)
+var rAuto := PackedFloat64Array()  # 代谢型(0异养..1自养:化能/光合)
+var rPhoto := PackedFloat64Array() # 自养中光合占比(0化能..1光合)
 var Par := PackedFloat64Array()    # 寄生/病原载量
 var Sym := PackedFloat64Array()
 var Seg := PackedFloat64Array()
@@ -125,6 +127,22 @@ const PAR_SEEDN := 3.0     # 宿主够密→寄生点燃
 const PAR_MAX := 20.0      # 载量上限(防数值爆炸)
 const rb := 0.9
 const rd := 0.12
+# —— 三代谢能量预算(world.html 582-597;git 核对的权威值,按 Godot dt 步长用 dl=dt/10 标定)——
+const rBirthK := 0.15       # 异养出生率
+const rBirthAutoK := 0.11   # 化能自养出生率
+const rBirthPhotoK := 0.32  # 光合出生率
+const rKhalf := 4.0         # 异养底物 Monod 半饱和
+const rYield := 0.6         # 异养产率(食物上限)
+const rMaintK := 0.03       # 维持代谢率(活着就烧)
+const rDeathK := 0.02       # 死亡基率
+const extinctK := 3.0       # 失配致死放大(灾变→大规模死=灭绝)
+const cFixK := 0.08         # 固碳率(化能/光合)
+const o2YieldK := 0.03      # 光合产氧率
+const o2half := 3.0         # 好氧半饱和 O₂
+const aerBoost := 0.8       # 好氧呼吸产能增益
+const rAutoAdaptK := 0.5    # 代谢型(异养↔自养)适应速率
+const respCK := 0.06        # 呼吸返碳系数
+const reminK := 0.02        # 生物量碳再矿化率(死亡氧化回 CO2)
 const MOVE := 0.12
 const FITW := 14.0
 const SALTW := 2.5
@@ -180,6 +198,8 @@ const VPULSE_A := 3.0
 var ocnC: float = 2.0       # 海洋溶解碳库
 var fosC: float = 0.0       # 化石/沉积有机碳库
 var organicC: float = 0.0   # 史前有机汤碳库(=Org 之和×cOrgK,守恒)
+var bioC: float = 0.0       # 生物量碳库(生命固碳/吃汤→此,呼吸→局部CO2,死亡→化石/碎屑,守恒)
+var o2Prod: float = 0.0     # 光合产氧累积(stepLife 累加,carbonStep 用于 GOE 后清零)
 var rockC: float = 10000.0  # 岩石+地幔碳库(火山源/风化汇)
 const seaExK := 0.05        # 海气碳交换率
 const buryK := 0.05         # 生物碳泵:净埋藏率(大气→化石,放等量 O₂)。温和→火山≈风化+埋藏,大气CO2自稳
@@ -383,7 +403,6 @@ func stepLife(dt: float) -> void:
 	var nAvail := clampf(availN / 3.0, 0.0, 1.0)
 	var eChem := 0.4 + 0.6 * clampf(globalRed / 4.0, 0.0, 1.0)
 	var dwO := OCHEM * dt / 10.0
-	var dTot := 0.0
 	for j in NLat:
 		var jb := j * NLon
 		for i in NLon:
@@ -406,11 +425,11 @@ func stepLife(dt: float) -> void:
 			var nLip := maxf(0.0, lip + lipFrac * syn - lipDecay * lip)
 			var dco := oCfrac * ((nOrg - org) + (nProt - prot) + (nLip - lip))        # 想从局部大气转移的碳
 			if dco > Co2[k]: dco = Co2[k]                                             # 受局部 CO2 限,不凭空造碳
-			Co2[k] -= dco; dTot += dco                                               # 实际转移量(守恒)
+			Co2[k] -= dco                                                            # 合成扣局部CO2/降解还(三库碳由 organicC 实时反映)
 			Org[k] = nOrg; Prot[k] = nProt; Lip[k] = nLip
 			if N[k] < SEED and (nOrg + nProt) > ORG_IGNITE and Hab[k] > 0.05:         # 汤(org+prot)够浓→点燃
 				N[k] = SEED; Topt[k] = Teff(j, i); Salt[k] = envSalt(j, i); Dry[k] = envDry(j, i)
-	organicC += dTot / float(SZ)                                                     # 均值入有机碳库(守恒:mean减=organicC增)
+	# organicC 不在此累积,由 carbonStep 末尾按 Σ三库实时算(与吃汤消耗一致,根除累积漂移)
 	# 增长 + 本地适应 + 形态发育
 	for j in NLat:
 		var jb := j * NLon
@@ -425,12 +444,41 @@ func stepLife(dt: float) -> void:
 			var fS := exp(-pow((Salt[k] - es) / SALTW, 2.0))
 			var fD := exp(-pow((Dry[k] - ed) / DRYW, 2.0))
 			var fit := fT * fS * fD
-			var K: float = max(1e-3, Kmax * Hab[k])
-			var aer := 1.0 + 0.18 * clampf(globalO2 / 10.0, 0.0, 1.0)
-			var r0 := rb * Hab[k] * fit * aer - rd
+			# 三代谢能量预算(world.html 582-597):异养(吃汤)/化能(还原剂)/光合(光);收入-维持-死亡→饿死。
+			# ⚠ redu/o2 暂用全局 globalRed/globalO2 近似(待局部);co2/food/碳流已局部,经 bioC 守恒。
 			var nn := N[k]
-			if r0 > 1e-6: N[k] = K / (1.0 + (K / nn - 1.0) * exp(-r0 * dt))
-			else: N[k] = max(0.0, nn * exp(r0 * dt))
+			var food := Org[k] + Prot[k]
+			var co2a := clampf(Co2[k] / 2.0, 0.0, 1.0)
+			var a := clampf(rAuto[k], 0.0, 1.0)
+			var p := clampf(rPhoto[k], 0.0, 1.0)
+			var o2f := clampf(globalO2 / o2half, 0.0, 1.0)
+			var gB := (1.0 + aerBoost * o2f) * Hab[k]                            # 好氧增益×宜居(其他性状后续叠)
+			var wHet := rBirthK * (food / (food + rKhalf)) * fit * gB
+			var wChemo := rBirthAutoK * clampf(globalRed / 4.0, 0.0, 1.0) * co2a * fit * gB
+			var wPhoto := rBirthPhotoK * clampf(Hab[k] * 1.6, 0.0, 1.0) * co2a * fit * gB
+			var dl := dt / 10.0
+			var realHet: float = minf(wHet * nn * (1.0 - a) * dl, food * rYield)
+			var realChemo: float = maxf(0.0, minf(wChemo * nn * a * (1.0 - p) * dl, (Co2[k] - 0.05) / cFixK))
+			var realPhoto: float = maxf(0.0, minf(wPhoto * nn * a * p * dl, (Co2[k] - 0.05) / cFixK))
+			var income := realHet + realChemo + realPhoto
+			var tempMet := clampf(0.6 + 0.4 * (teff + 5.0) / 25.0, 0.4, 1.8)
+			var maint := rMaintK * nn * tempMet * dl
+			var deaths := rDeathK * nn * (1.0 + extinctK * (1.0 - fit)) * dl
+			# 碳流(守恒,经 bioC):吃汤碳→bioC;固局部CO2→bioC;呼吸 bioC→局部CO2
+			var fr: float = minf(1.0, (realHet / rYield) / maxf(food, 1e-6))
+			var cEat := oCfrac * food * fr
+			Org[k] *= (1.0 - fr); Prot[k] *= (1.0 - fr)
+			bioC += cEat / float(SZ)                                             # 汤碳→生物碳(organicC 由 carbonStep 按Σ三库实时算)
+			var fixC: float = minf(cFixK * (realChemo + realPhoto), Co2[k])
+			Co2[k] -= fixC; bioC += fixC / float(SZ)                             # 固局部CO2→生物碳(均值)
+			var respC: float = respCK * maint
+			bioC -= respC / float(SZ); Co2[k] += respC                           # 呼吸:生物碳→局部CO2
+			o2Prod += o2YieldK * realPhoto
+			N[k] = maxf(0.0, nn + income - maint - deaths)
+			# 代谢型适应:自养(化能/光合更优)↔异养;光合↔化能
+			if N[k] > 1e-3:
+				rAuto[k] = clampf(a + rAutoAdaptK * dl * (maxf(wChemo, wPhoto) - wHet), 0.0, 1.0)
+				rPhoto[k] = clampf(p + rAutoAdaptK * dl * (wPhoto - wChemo), 0.0, 1.0)
 			# 有性生殖加速适应(红皇后:有性投资→适应更快)
 			var sb: float = 1.0 + SEX_BOOST * rSex[k]
 			Topt[k] += min(0.99, aT * sb) * (teff - Topt[k])
@@ -503,6 +551,12 @@ func stepLife(dt: float) -> void:
 	_diffuse(H, FW_DIFF * ds)
 	_diffuse(C, FW_DIFF * ds)
 	_diffuse(Par, FW_DIFF * ds)
+	var soC := 0.0
+	var scC := 0.0
+	for k in SZ:
+		soC += Org[k] + Prot[k] + Lip[k]; scC += Co2[k]
+	organicC = oCfrac * soC / float(SZ)                                          # 末尾刷新有机碳库(=Σ三库)
+	globalCO2 = scC / float(SZ)                                                  # 末尾刷新 globalCO2(stepLife 改了局部 Co2,否则测量滞后)
 
 func _diffuse(F: PackedFloat64Array, rate: float) -> void:   # 四邻扩散(守恒),复用 _flow 缓冲
 	_flow.fill(0.0)
@@ -621,7 +675,7 @@ func carbonStep() -> void:
 	rockC -= pulse                                                               # 暗色岩省脉冲
 	var oxid := foxCK * fosC; fosC -= oxid                                        # 化石出露氧化→大气
 	var injPer := volcOut + pulse + oxid                                          # 每格大气注入(mean += injPer)
-	var wTot := 0.0; var oTot := 0.0; var bTot := 0.0
+	var wTot := 0.0; var oTot := 0.0
 	for k in SZ:
 		var c := Co2[k] + injPer
 		var tempf := clampf(1.0 + 0.06 * (c - CO2ref), 0.4, 3.0)                 # 暖→风化快(恒温器负反馈)
@@ -629,16 +683,22 @@ func carbonStep() -> void:
 		c -= wq; wTot += wq                                                      # 风化:所有格大气→岩石(陆地碳硅酸盐+海底风化,恒温器汇)
 		if Land[k] == 0:
 			var dOcn := seaExK * (c - ocnC); c -= dOcn; oTot += dOcn             # 海洋额外:海气交换趋平衡
-		var bury: float = minf(c, buryK * clampf(N[k] / 12.0, 0.0, 2.0))
-		c -= bury; bTot += bury                                                  # 生物碳泵:大气→化石,放 O₂
 		Co2[k] = maxf(0.0, c)
-	rockC += wTot / float(SZ); ocnC += oTot / float(SZ); fosC += bTot / float(SZ) # 汇均值入全局库(守恒:mean减=库增)
+	rockC += wTot / float(SZ); ocnC += oTot / float(SZ)                          # 风化/海气汇入全局库(守恒)
+	# 生物碳泵 + 再矿化:生物量碳 bioC 一部分埋藏成化石(锁碳放O₂),一部分氧化回大气(守恒)
+	var buryB := buryK * clampf(bioC / 50.0, 0.0, 2.0)
+	bioC -= buryB; fosC += buryB
+	var remin := reminK * bioC; bioC -= remin
+	for k in SZ: Co2[k] += remin                                                 # 库→每格大气加全量(mean 增 remin = bioC 减,守恒)
 	_diffuse(Co2, co2Diff)                                                        # 大气混合
 	var sc := 0.0
-	for k in SZ: sc += Co2[k]
+	var so := 0.0
+	for k in SZ:
+		sc += Co2[k]; so += Org[k] + Prot[k] + Lip[k]
 	globalCO2 = sc / float(SZ)                                                    # 全局指标=场均浓度
+	organicC = oCfrac * so / float(SZ)                                           # 有机碳库=Σ三库实时(与史前化学/吃汤一致,免累积漂移)
 	# 氧(GOE):净埋藏有机碳=放等量 O₂;先被火山还原气 + 还原缓冲库吃,库耗尽才阈值式跃升
-	var avail := bTot / float(SZ)                                                 # 每格均值量纲(对齐全局 O₂/还原库)
+	var avail := o2Prod / float(SZ); o2Prod = 0.0                                 # GOE 用光合产氧(均值量纲),用后清零
 	var byGas: float = min(avail, o2ResupD); avail -= byGas
 	var byRed: float = min(avail, globalRed * 0.02); avail -= byRed; globalRed = max(0.0, globalRed - byRed)
 	globalO2 = clampf(globalO2 + avail - o2RespK * globalO2, 0.0, 21.0)
@@ -751,12 +811,13 @@ func spinUp() -> void:
 	Org = gridF(0.0); Prot = gridF(0.0); Lip = gridF(0.0)
 	spId = PackedInt32Array(); spId.resize(SZ)
 	rSex = gridF(0.0); Par = gridF(0.0)
+	rAuto = gridF(0.0); rPhoto = gridF(0.0)
 	Sym = gridF(0.0); Seg = gridF(0.0); Limb = gridF(0.0); Axis = gridF(0.0)
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
 	MOC = 1.0; geoT = 0; climCool = 0.0; globalCO2 = 2.0; impactWinter = 0.0
 	iceVol = 0.0; refIce = -1.0; seaOffset = 0.0
-	Co2 = gridF(CO2ref); ocnC = 2.0; fosC = 0.0; rockC = 10000.0; globalO2 = 0.0; globalRed = 4.0; atmN2 = 1000.0; availN = 2.0; organicC = 0.0
+	Co2 = gridF(CO2ref); ocnC = 2.0; fosC = 0.0; rockC = 10000.0; globalO2 = 0.0; globalRed = 4.0; atmN2 = 1000.0; availN = 2.0; organicC = 0.0; bioC = 0.0; o2Prod = 0.0
 	disE = PackedFloat64Array(); disE.resize(SZ * NE)
 	depE = PackedFloat64Array(); depE.resize(SZ * NE)
 	subPoolE = PackedFloat64Array(); subPoolE.resize(NE)

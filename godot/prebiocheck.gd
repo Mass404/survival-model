@@ -6,7 +6,7 @@ const Sim = preload("res://sim/World.gd")
 func _initialize() -> void:
 	var w = Sim.new()
 	w.spinUp()
-	var c0: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC
+	var c0: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC + w.bioC
 	var sz: int = w.N.size()
 	var day := 0
 	var igniteY := -1
@@ -30,7 +30,7 @@ func _initialize() -> void:
 				if alive: igniteY = w.geoT; igniteO2 = w.globalO2; igniteOrg = so
 			if goeY < 0 and w.globalO2 > 1.0: goeY = w.geoT; orgAtGOE = so
 		day += 1
-	var c1: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC
+	var c1: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC + w.bioC
 	var cdrift: float = absf(c1 - c0)
 	print("=== 史前有机化学(生命起源)验证 ===")
 	print("生命起源 @ 第 %d 年  (起源时 O2=%.2f, ΣOrg=%.1f)" % [igniteY, igniteO2, igniteOrg])
