@@ -60,6 +60,9 @@ var spId := PackedInt32Array()
 var rSex := PackedFloat64Array()   # 有性生殖投资(0克隆..1全有性)
 var rAuto := PackedFloat64Array()  # 代谢型(0异养..1自养:化能/光合)
 var rPhoto := PackedFloat64Array() # 自养中光合占比(0化能..1光合)
+var rAero := PackedFloat64Array()  # 好氧度(O₂从毒→资源:耐O₂毒 + 好氧呼吸产能)
+var rEuk := PackedFloat64Array()   # 真核化(富氧+体型→内共生线粒体→能量暴涨)
+var rSize := PackedFloat64Array()  # 体型(大→慢长 + 省维持 + 难被吃)
 var Par := PackedFloat64Array()    # 寄生/病原载量
 var Sym := PackedFloat64Array()
 var Seg := PackedFloat64Array()
@@ -143,6 +146,15 @@ const aerBoost := 0.8       # 好氧呼吸产能增益
 const rAutoAdaptK := 0.5    # 代谢型(异养↔自养)适应速率
 const respCK := 0.06        # 呼吸返碳系数
 const reminK := 0.02        # 生物量碳再矿化率(死亡氧化回 CO2)
+# —— 性状层(world.html 600-649;复杂度演化,adaptive dynamics)——
+const euGain := 1.0          # 真核能量增益基
+const euCost := 0.1          # 真核维持成本
+const euAdaptK := 0.05       # 真核适应速率
+const euBoost := 1.2         # 真核线粒体产能增益(gB)
+const rAeroAdaptK := 0.1     # 好氧度适应速率
+const aerCostSel := 0.04     # 好氧成本(选择)
+const sizeCost := 0.45       # 体型增殖减速
+const sizeAdaptK := 0.04     # 体型适应速率
 const MOVE := 0.12
 const FITW := 14.0
 const SALTW := 2.5
@@ -452,7 +464,9 @@ func stepLife(dt: float) -> void:
 			var a := clampf(rAuto[k], 0.0, 1.0)
 			var p := clampf(rPhoto[k], 0.0, 1.0)
 			var o2f := clampf(globalO2 / o2half, 0.0, 1.0)
-			var gB := (1.0 + aerBoost * o2f) * Hab[k]                            # 好氧增益×宜居(其他性状后续叠)
+			var aerB := 1.0 + aerBoost * clampf(rAero[k], 0.0, 1.0) * o2f + euBoost * clampf(rEuk[k], 0.0, 1.0) * o2f
+			var szSlow := 1.0 - sizeCost * clampf(rSize[k], 0.0, 1.0) * (1.0 - 0.5 * clampf(rEuk[k], 0.0, 1.0))
+			var gB := aerB * szSlow * Hab[k]                                     # 好氧+真核增益 × 体型增殖减速 × 宜居
 			var wHet := rBirthK * (food / (food + rKhalf)) * fit * gB
 			var wChemo := rBirthAutoK * clampf(globalRed / 4.0, 0.0, 1.0) * co2a * fit * gB
 			var wPhoto := rBirthPhotoK * clampf(Hab[k] * 1.6, 0.0, 1.0) * co2a * fit * gB
@@ -479,6 +493,11 @@ func stepLife(dt: float) -> void:
 			if N[k] > 1e-3:
 				rAuto[k] = clampf(a + rAutoAdaptK * dl * (maxf(wChemo, wPhoto) - wHet), 0.0, 1.0)
 				rPhoto[k] = clampf(p + rAutoAdaptK * dl * (wPhoto - wChemo), 0.0, 1.0)
+				rAero[k] = clampf(rAero[k] + rAeroAdaptK * dl * (aerBoost * o2f + 3.0 * redox - aerCostSel), 0.0, 1.0)   # 富氧→好氧度升,缺氧→纯成本归零
+				var szc := clampf(rSize[k], 0.0, 1.0)
+				rEuk[k] = clampf(rEuk[k] + euAdaptK * dl * (euGain * o2f * clampf(szc * 2.0, 0.0, 1.0) - euCost), 0.0, 1.0)   # 富氧+体型→真核化
+				var predP := clampf(H[k] / 5.0, 0.0, 1.0)
+				rSize[k] = clampf(rSize[k] + sizeAdaptK * dl * (predP * 0.5 + 0.3 - 0.4), 0.0, 1.0)   # 捕食压→大体型(防御)
 			# 有性生殖加速适应(红皇后:有性投资→适应更快)
 			var sb: float = 1.0 + SEX_BOOST * rSex[k]
 			Topt[k] += min(0.99, aT * sb) * (teff - Topt[k])
@@ -811,7 +830,7 @@ func spinUp() -> void:
 	Org = gridF(0.0); Prot = gridF(0.0); Lip = gridF(0.0)
 	spId = PackedInt32Array(); spId.resize(SZ)
 	rSex = gridF(0.0); Par = gridF(0.0)
-	rAuto = gridF(0.0); rPhoto = gridF(0.0)
+	rAuto = gridF(0.0); rPhoto = gridF(0.0); rAero = gridF(0.0); rEuk = gridF(0.0); rSize = gridF(0.0)
 	Sym = gridF(0.0); Seg = gridF(0.0); Limb = gridF(0.0); Axis = gridF(0.0)
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
