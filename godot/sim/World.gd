@@ -63,6 +63,9 @@ var rPhoto := PackedFloat64Array() # 自养中光合占比(0化能..1光合)
 var rAero := PackedFloat64Array()  # 好氧度(O₂从毒→资源:耐O₂毒 + 好氧呼吸产能)
 var rEuk := PackedFloat64Array()   # 真核化(富氧+体型→内共生线粒体→能量暴涨)
 var rSize := PackedFloat64Array()  # 体型(大→慢长 + 省维持 + 难被吃)
+var rMulti := PackedFloat64Array() # 多细胞(真核×捕食压→大到吞不动,捕食免疫)
+var rDiff := PackedFloat64Array()  # 细胞分化(多细胞×稳定竞争→germ-soma分工)
+var rShell := PackedFloat64Array() # 矿化壳(多细胞×捕食×钙→建壳防御,寒武)
 var Par := PackedFloat64Array()    # 寄生/病原载量
 var Sym := PackedFloat64Array()
 var Seg := PackedFloat64Array()
@@ -155,6 +158,16 @@ const rAeroAdaptK := 0.1     # 好氧度适应速率
 const aerCostSel := 0.04     # 好氧成本(选择)
 const sizeCost := 0.45       # 体型增殖减速
 const sizeAdaptK := 0.04     # 体型适应速率
+const multiDef := 1.0        # 多细胞防御(捕食免疫)
+const multiCost := 0.15      # 多细胞成本
+const multiAdaptK := 0.05    # 多细胞适应速率
+const diffCost := 0.12       # 分化成本
+const diffRepCost := 0.25    # 分化繁殖代价(gB)
+const diffAdaptK := 0.05     # 分化适应速率
+const shellDef := 0.85       # 矿化壳防御
+const shellCost := 0.12      # 建壳成本
+const shellGrowCost := 0.2   # 建壳繁殖代价(gB)
+const shellAdaptK := 0.04    # 壳适应速率
 const MOVE := 0.12
 const FITW := 14.0
 const SALTW := 2.5
@@ -466,7 +479,7 @@ func stepLife(dt: float) -> void:
 			var o2f := clampf(globalO2 / o2half, 0.0, 1.0)
 			var aerB := 1.0 + aerBoost * clampf(rAero[k], 0.0, 1.0) * o2f + euBoost * clampf(rEuk[k], 0.0, 1.0) * o2f
 			var szSlow := 1.0 - sizeCost * clampf(rSize[k], 0.0, 1.0) * (1.0 - 0.5 * clampf(rEuk[k], 0.0, 1.0))
-			var gB := aerB * szSlow * Hab[k]                                     # 好氧+真核增益 × 体型增殖减速 × 宜居
+			var gB := aerB * szSlow * Hab[k] * (1.0 - 0.3 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - diffRepCost * clampf(rDiff[k], 0.0, 1.0)) * (1.0 - shellGrowCost * clampf(rShell[k], 0.0, 1.0))   # ×多细胞/分化/壳 增殖代价
 			var wHet := rBirthK * (food / (food + rKhalf)) * fit * gB
 			var wChemo := rBirthAutoK * clampf(globalRed / 4.0, 0.0, 1.0) * co2a * fit * gB
 			var wPhoto := rBirthPhotoK * clampf(Hab[k] * 1.6, 0.0, 1.0) * co2a * fit * gB
@@ -498,6 +511,12 @@ func stepLife(dt: float) -> void:
 				rEuk[k] = clampf(rEuk[k] + euAdaptK * dl * (euGain * o2f * clampf(szc * 2.0, 0.0, 1.0) - euCost), 0.0, 1.0)   # 富氧+体型→真核化
 				var predP := clampf(H[k] / 5.0, 0.0, 1.0)
 				rSize[k] = clampf(rSize[k] + sizeAdaptK * dl * (predP * 0.5 + 0.3 - 0.4), 0.0, 1.0)   # 捕食压→大体型(防御)
+				var euG := clampf(rEuk[k] * 2.0, 0.0, 1.0)
+				rMulti[k] = clampf(rMulti[k] + multiAdaptK * dl * (euG * predP * multiDef - multiCost), 0.0, 1.0)   # 真核×捕食压→多细胞
+				var muG := clampf(rMulti[k] * 2.0, 0.0, 1.0)
+				rDiff[k] = clampf(rDiff[k] + diffAdaptK * dl * (muG * (0.6 + predP * 0.5) - diffCost), 0.0, 1.0)   # 多细胞×(稳定+捕食)→分化
+				var minAvail := clampf(disE[k * NE + 1] / 150.0, 0.0, 1.0)
+				rShell[k] = clampf(rShell[k] + shellAdaptK * dl * (muG * predP * minAvail - shellCost), 0.0, 1.0)   # 多细胞×捕食×钙→壳
 			# 有性生殖加速适应(红皇后:有性投资→适应更快)
 			var sb: float = 1.0 + SEX_BOOST * rSex[k]
 			Topt[k] += min(0.99, aT * sb) * (teff - Topt[k])
@@ -831,6 +850,7 @@ func spinUp() -> void:
 	spId = PackedInt32Array(); spId.resize(SZ)
 	rSex = gridF(0.0); Par = gridF(0.0)
 	rAuto = gridF(0.0); rPhoto = gridF(0.0); rAero = gridF(0.0); rEuk = gridF(0.0); rSize = gridF(0.0)
+	rMulti = gridF(0.0); rDiff = gridF(0.0); rShell = gridF(0.0)
 	Sym = gridF(0.0); Seg = gridF(0.0); Limb = gridF(0.0); Axis = gridF(0.0)
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
