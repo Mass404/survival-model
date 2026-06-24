@@ -1,0 +1,81 @@
+class_name Local
+extends RefCounted
+# 局部生存层地基(#9,完全移植 world.html 局部模型的起点)。
+# 地点图(locs+routes)+ 逐分钟引擎 + 玩家旅行 + 人体生理(Body)。
+# 全球行星按 PushBoundary 每小时把某(纬,经)的有效气候喂进每个地点(气候/海温/冰期都体现在 Teff)。
+# 深层每地点系统(逐格岩性/土壤/河流/潮汐/分钟级天气)留待后续按 HANDOFF_PORTING.md 接。确定性、零随机。
+const Sim = preload("res://sim/World.gd")
+const BodyS = preload("res://sim/Body.gd")
+
+var world                     # 全球行星(边界源)
+var geo
+var locs := []                # {name,lat,lon,kind,envTemp}
+var routes := []              # [a,b,分钟]
+var player := 0
+var body                      # Body 实例(玩家身体)
+var traveling = null          # {to,left,tot}
+var total := 0                # 分钟计数
+
+func setup(w, g) -> void:
+	world = w
+	geo = g
+	body = BodyS.new()
+	_build()
+
+func _build() -> void:
+	locs = [
+		{"name": "赤道海岸", "lat": 2.0, "lon": 150.0, "kind": "coast"},
+		{"name": "温带林", "lat": 40.0, "lon": 150.0, "kind": "forest"},
+		{"name": "高山", "lat": 42.0, "lon": 156.0, "kind": "mountain"},
+		{"name": "极地苔原", "lat": 76.0, "lon": 150.0, "kind": "tundra"},
+		{"name": "洞穴", "lat": 40.0, "lon": 150.0, "kind": "cave"},
+	]
+	routes = [[0, 1, 600], [1, 2, 400], [1, 4, 120], [1, 3, 1200]]
+	_push_boundary()
+
+# PushBoundary:全球行星某(纬,经)的有效气温 → 地点环境(地形调制)
+func _env_temp(lat: float, lon: float, kind: String) -> float:
+	var j: int = clampi(int((lat + 90.0) / 180.0 * Sim.NLat), 0, Sim.NLat - 1)
+	var i: int = ((int(lon / 360.0 * Sim.NLon)) % Sim.NLon + Sim.NLon) % Sim.NLon
+	var t: float = world.Teff(j, i)
+	match kind:
+		"mountain": t -= 12.0                       # 高程递减
+		"cave": t = 0.7 * t + 0.3 * 12.0            # 洞穴趋恒温
+		"coast": t = 0.85 * t + 0.15 * 18.0         # 海洋调节
+		"tundra": t -= 2.0
+	return t
+
+func _push_boundary() -> void:
+	for L in locs:
+		L["envTemp"] = _env_temp(L["lat"], L["lon"], L["kind"])
+
+func cur_loc() -> Dictionary:
+	return locs[player]
+
+func neighbors(k: int) -> Array:
+	var out := []
+	for r in routes:
+		if r[0] == k: out.append([r[1], r[2]])
+		elif r[1] == k: out.append([r[0], r[2]])
+	return out
+
+func travel_to(k: int) -> bool:
+	if traveling != null: return false
+	for nb in neighbors(player):
+		if nb[0] == k:
+			traveling = {"to": k, "left": nb[1], "tot": nb[1]}
+			return true
+	return false
+
+func step(minutes: int) -> void:
+	for _m in minutes:
+		total += 1
+		if traveling != null:
+			traveling["left"] -= 1
+			if traveling["left"] <= 0:
+				player = traveling["to"]; traveling = null
+		if total % 60 == 0:                          # 每小时:刷新边界 + 推进身体
+			_push_boundary()
+			var env: float = cur_loc()["envTemp"]
+			var act: float = 1.4 if traveling != null else 1.0   # 旅途更耗
+			body.step(1, env, act)
