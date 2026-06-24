@@ -66,6 +66,10 @@ var rSize := PackedFloat64Array()  # 体型(大→慢长 + 省维持 + 难被吃
 var rMulti := PackedFloat64Array() # 多细胞(真核×捕食压→大到吞不动,捕食免疫)
 var rDiff := PackedFloat64Array()  # 细胞分化(多细胞×稳定竞争→germ-soma分工)
 var rShell := PackedFloat64Array() # 矿化壳(多细胞×捕食×钙→建壳防御,寒武)
+var rNeuro := PackedFloat64Array() # 感觉神经(多细胞×移动+捕食→觅食/避敌)
+var rEndo := PackedFloat64Array()  # 温血(多细胞×冷胁迫→恒温,拓宽耐温但高耗能)
+var rSymb := PackedFloat64Array()  # 互利共生(贫氮→固氮伙伴供养)
+var rMemb := PackedFloat64Array()  # 膜泡(脂质过CMC→浓缩增殖+保护)
 var Par := PackedFloat64Array()    # 寄生/病原载量
 var Sym := PackedFloat64Array()
 var Seg := PackedFloat64Array()
@@ -851,6 +855,7 @@ func spinUp() -> void:
 	rSex = gridF(0.0); Par = gridF(0.0)
 	rAuto = gridF(0.0); rPhoto = gridF(0.0); rAero = gridF(0.0); rEuk = gridF(0.0); rSize = gridF(0.0)
 	rMulti = gridF(0.0); rDiff = gridF(0.0); rShell = gridF(0.0)
+	rNeuro = gridF(0.0); rEndo = gridF(0.0); rSymb = gridF(0.0); rMemb = gridF(0.0)
 	Sym = gridF(0.0); Seg = gridF(0.0); Limb = gridF(0.0); Axis = gridF(0.0)
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
