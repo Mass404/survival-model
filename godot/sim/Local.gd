@@ -15,6 +15,7 @@ var player := 0
 var body                      # Body 实例(玩家身体)
 var traveling = null          # {to,left,tot}
 var total := 0                # 分钟计数
+var auto_forage := false      # 开则每小时自动觅食(供验证/简单 AI)
 
 func setup(w, g) -> void:
 	world = w
@@ -45,9 +46,32 @@ func _env_temp(lat: float, lon: float, kind: String) -> float:
 		"tundra": t -= 2.0
 	return t
 
+func _cell(lat: float, lon: float) -> int:
+	var j: int = clampi(int((lat + 90.0) / 180.0 * Sim.NLat), 0, Sim.NLat - 1)
+	var i: int = ((int(lon / 360.0 * Sim.NLon)) % Sim.NLon + Sim.NLon) % Sim.NLon
+	return j * Sim.NLon + i
+
 func _push_boundary() -> void:
 	for L in locs:
 		L["envTemp"] = _env_temp(L["lat"], L["lon"], L["kind"])
+		# 资源:食物=当地植被(全球 N 生物量) + 海岸海产;水=降水(淡水)。按容量再生
+		var k: int = _cell(L["lat"], L["lon"])
+		var veg: float = world.N[k] + world.H[k] * 0.5     # 生产者+食草(可猎)
+		if L["kind"] == "coast": veg += 8.0                # 海产
+		var precip: float = world.P[k]
+		L["foodCap"] = veg * 60.0                          # kcal 容量
+		L["waterCap"] = precip * 2500.0 + (300.0 if L["kind"] == "coast" else 0.0)
+		L["food"] = min(L.get("food", L["foodCap"] * 0.5) + L["foodCap"] * 0.03, L["foodCap"])
+		L["water"] = min(L.get("water", L["waterCap"] * 0.5) + L["waterCap"] * 0.06, L["waterCap"])
+
+# 觅食:从当前地点采集食物/水喂给身体(消耗地点存量,会再生)
+func forage(hours: int) -> void:
+	var L = cur_loc()
+	var gotW: float = min(L.get("water", 0.0), 350.0 * hours)
+	L["water"] = L.get("water", 0.0) - gotW; body.drink(gotW)
+	var gotF: float = min(L.get("food", 0.0), 220.0 * hours)
+	L["food"] = L.get("food", 0.0) - gotF
+	if gotF > 0.0: body.eat(gotF, gotF * 0.6, gotF * 0.04, 0.08)   # 植物/猎物:带水、少量蛋白
 
 func cur_loc() -> Dictionary:
 	return locs[player]
@@ -74,8 +98,9 @@ func step(minutes: int) -> void:
 			traveling["left"] -= 1
 			if traveling["left"] <= 0:
 				player = traveling["to"]; traveling = null
-		if total % 60 == 0:                          # 每小时:刷新边界 + 推进身体
+		if total % 60 == 0:                          # 每小时:刷新边界 + 觅食 + 推进身体
 			_push_boundary()
+			if auto_forage and traveling == null: forage(1)
 			var env: float = cur_loc()["envTemp"]
 			var act: float = 1.4 if traveling != null else 1.0   # 旅途更耗
 			body.step(1, env, act)

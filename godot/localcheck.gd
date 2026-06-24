@@ -41,7 +41,20 @@ func _initialize() -> void:
 	loc2.step(500)                                  # 路线 400 分钟 < 500
 	var traveled: bool = ok_start and loc2.player == 2 and loc2.traveling == null
 
+	# ④ 觅食生存闭环:温带林里觅食者熬过 30 天,断供者饿死/渴死
+	var fora = LocalS.new(); fora.setup(w, g); fora.player = 1; fora.auto_forage = true
+	for m in 30 * 24 * 60:
+		fora.step(1)
+		if fora.body.dead: break
+	var forager_lives: bool = not fora.body.dead
+	var idle = LocalS.new(); idle.setup(w, g); idle.player = 1; idle.auto_forage = false
+	for m in 30 * 24 * 60:
+		idle.step(1)
+		if idle.body.dead: break
+	var loop_works: bool = forager_lives and idle.body.dead
+
 	print("地点气候差异(跨度 %.1f℃): %s" % [tmax - tmin, "✅" if distinct else "❌"])
 	print("身体在局部气候推进+断供致死(存活 %dh,因:%s): %s" % [survived_h, loc.body.deathCause, "✅" if bodyworks else "❌"])
 	print("玩家旅行到目标地点: %s" % ("✅" if traveled else "❌"))
-	quit(0 if (distinct and bodyworks and traveled) else 1)
+	print("觅食生存闭环(温带林觅食者活过30天 / 断供者死@%dh): %s" % [idle.body.hoursAlive, "✅" if loop_works else "❌"])
+	quit(0 if (distinct and bodyworks and traveled and loop_works) else 1)
