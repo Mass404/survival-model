@@ -48,7 +48,10 @@ var FR := PackedFloat64Array()
 var N := PackedFloat64Array()      # 生产者生物量
 var H := PackedFloat64Array()      # 食草者(一级消费者)
 var C := PackedFloat64Array()      # 食肉者(二级消费者)
-var Org := PackedFloat64Array()    # 史前有机汤(生命前;合成-降解张弛,跨阈点燃生命)
+var Org := PackedFloat64Array()    # 史前有机汤 org(生命前底物)
+var Prot := PackedFloat64Array()   # 蛋白质 prot(org 聚合而来;与 org 同为生命食物 food)
+var Lip := PackedFloat64Array()    # 脂质 lip(合成副产物→过 CMC 自组装膜泡)
+var Co2 := PackedFloat64Array()    # 每格大气 CO2(局部化学;ΣCo2=大气总碳,globalCO2=场均浓度)
 var Hab := PackedFloat64Array()
 var Topt := PackedFloat64Array()
 var Salt := PackedFloat64Array()
@@ -91,11 +94,17 @@ var _in_warm := false
 const SEED := 0.05
 const IGNITE := 0.45
 const Kmax := 40.0
-# —— 史前有机化学(从 world.html;生命前攒有机汤,跨阈点燃,无氧早期才行)——
-const oSynK := 0.04      # 有机合成率(暖×能量×原料×无氧×有水)
-const oDecK := 0.02      # 有机降解率(×O₂氧化加成)
-const ORG_IGNITE := 0.4  # 有机汤点燃生命阈值(替代 Hab>IGNITE)
-const cOrgK := 0.003     # 有机汤↔CO₂碳转换(痕量有机碳库,守恒记入 organicC)
+# —— 史前有机化学(从 world.html 564-567;org/prot/lip 三库:合成→聚合↔水解→降解张弛)——
+# K 值取自 world.html 权威常量(原配 CHEM=60 逐分钟步长);OCHEM 把它们重标定到 stepLife 的 dt 步长。
+const OCHEM := 40.0      # 时间步标定系数(原版逐分钟×60;此处配 stepLife,prebiocheck 调准)
+const oSynK := 5e-4      # 合成率 org(world.html 原值)
+const oPolyK := 2e-3     # 聚合率 org²→prot
+const oHydK := 8e-5      # 水解率 prot→org
+const oDecK := 6e-7      # 降解率(org+prot)×O₂氧化
+const lipFrac := 0.25    # 脂质=合成副产物比例
+const lipDecay := 0.002  # 脂质降解率
+const oCfrac := 0.001    # 有机↔无机碳转换(守恒;world.html 0.02,按 Godot org 量级重标到痕量,免抽干大气)
+const ORG_IGNITE := 2.5  # 有机汤(org+prot)点燃阈值(world.html rIgnite=5,按 Godot org 量级重标)
 # 食物网(Holling-II 捕食,饱和→稳定;系数按 stepLife dt=10 标定,validate 验金字塔/共存)
 const FW_HALF := 8.0       # 半饱和猎物量
 const FW_GRAZE := 0.5      # 单位捕食者最大摄食压
@@ -163,7 +172,7 @@ var globalCO2 := 2.0
 const CO2ref := 2.0
 const cGhouse := 2.2
 const volcOut := 0.3
-const weatherK := 0.2
+const weatherK := 0.2        # 风化率(局部化后所有格都风化=等效原全局风化,恒温器自稳)
 const bioK := 0.1
 const VPULSE_T := 40
 const VPULSE_A := 3.0
@@ -174,6 +183,7 @@ var organicC: float = 0.0   # 史前有机汤碳库(=Org 之和×cOrgK,守恒)
 var rockC: float = 10000.0  # 岩石+地幔碳库(火山源/风化汇)
 const seaExK := 0.05        # 海气碳交换率
 const buryK := 0.05         # 生物碳泵:净埋藏率(大气→化石,放等量 O₂)。温和→火山≈风化+埋藏,大气CO2自稳
+const co2Diff := 0.2        # 大气 CO2 四邻混合率(局部场扩散)
 const foxCK := 0.002        # 化石出露氧化率(→大气)
 var globalO2: float = 0.0   # 大气 O₂(%)
 var globalRed: float = 4.0  # 还原缓冲库(海洋Fe²⁺/火山还原气)→压住早期 O₂,耗尽才 GOE
@@ -366,26 +376,41 @@ func stepLife(dt: float) -> void:
 	var aT := 1.0 - exp(-0.05 * dt)
 	var aS := 1.0 - exp(-0.04 * dt)
 	var aD := 1.0 - exp(-0.05 * dt)
-	# 史前有机化学 + 起源:每格攒有机汤(合成 暖×能量×原料×无氧×有水 - O₂氧化降解),跨阈才点燃生命
-	var feed := clampf(globalCO2 / 2.0, 0.0, 1.0) * clampf(availN / 2.0, 0.0, 1.0)   # 原料:CO₂ + 可用氮
-	var anox := clampf(1.0 - globalO2 / 3.0, 0.0, 1.0)                               # 无氧度:GOE前高,GOE后→0
-	var eChem := 0.4 + 0.6 * clampf(globalRed / 4.0, 0.0, 1.0)                       # 还原缓冲≈喷口/火山化学能
-	var oxidD := 1.0 + 5.0 * clampf(globalO2 / 5.0, 0.0, 1.0)                        # O₂→氧化降解加快
-	var dwOrg := dt / 10.0
-	var dOrg := 0.0
+	# 史前有机化学(world.html 564-567):org/prot/lip 三库张弛 合成→聚合↔水解→降解,跨阈点燃生命。
+	# ⚠ 局部底座未建:energy(闪电charge/喷口freeEnergy)、co2/o2/redox 暂用全局近似;
+	#    feed 的氮暂用全局 availN,催化 cat 已接每格 depE(硫/镍)。待局部化学状态层建好再接局部。
+	var redox := clampf(globalO2 / 5.0, 0.0, 1.0)
+	var nAvail := clampf(availN / 3.0, 0.0, 1.0)
+	var eChem := 0.4 + 0.6 * clampf(globalRed / 4.0, 0.0, 1.0)
+	var dwO := OCHEM * dt / 10.0
+	var dTot := 0.0
 	for j in NLat:
 		var jb := j * NLon
 		for i in NLon:
 			var k := jb + i
+			var ke := k * NE
 			var tf := Teff(j, i)
 			var warm := clampf((tf + 5.0) / 25.0, 0.0, 1.0) * clampf((60.0 - tf) / 40.0, 0.0, 1.0)
-			var syn := oSynK * warm * eChem * feed * anox * Hab[k] * dwOrg
-			var dec := oDecK * Org[k] * oxidD * dwOrg
-			Org[k] = maxf(0.0, Org[k] + syn - dec)
-			dOrg += syn - dec
-			if N[k] < SEED and Org[k] > ORG_IGNITE and Hab[k] > 0.05:   # 有机汤够浓+有水→点燃(无氧已含在 Org 累积里)
+			var feed := clampf(Co2[k] / 2.0, 0.0, 1.0) * nAvail * (1.0 - redox)      # 原料:局部CO₂×氮×还原环境
+			var cat := clampf((depE[ke + 16] + depE[ke + 28]) / 2.0, 0.0, 0.8)        # 局部矿物表面催化(硫/镍 depE)
+			var water := Hab[k]                                                       # 含水近似(待每格 Soil/Lake)
+			var conc := clampf((1.0 - water) + 0.8 * cat, 0.0, 1.5)                   # 浓缩:干涸+吸附
+			var energy := 0.6 * warm + eChem                                         # 能量:闪电(暖→对流代理)+喷口还原(对齐 world 0.6×charge+freeEnergy)
+			var org := Org[k]; var prot := Prot[k]; var lip := Lip[k]
+			var syn := oSynK * energy * feed * dwO
+			var poly := oPolyK * org * org * conc * cat * dwO
+			var hyd := oHydK * prot * clampf(water, 0.0, 1.0) * dwO
+			var dec := oDecK * (org + prot) * (1.0 + 5.0 * redox) * dwO
+			var nOrg := maxf(0.0, org + syn + hyd - poly - 0.5 * dec)
+			var nProt := maxf(0.0, prot + poly - hyd - 0.5 * dec)
+			var nLip := maxf(0.0, lip + lipFrac * syn - lipDecay * lip)
+			var dco := oCfrac * ((nOrg - org) + (nProt - prot) + (nLip - lip))        # 想从局部大气转移的碳
+			if dco > Co2[k]: dco = Co2[k]                                             # 受局部 CO2 限,不凭空造碳
+			Co2[k] -= dco; dTot += dco                                               # 实际转移量(守恒)
+			Org[k] = nOrg; Prot[k] = nProt; Lip[k] = nLip
+			if N[k] < SEED and (nOrg + nProt) > ORG_IGNITE and Hab[k] > 0.05:         # 汤(org+prot)够浓→点燃
 				N[k] = SEED; Topt[k] = Teff(j, i); Salt[k] = envSalt(j, i); Dry[k] = envDry(j, i)
-	globalCO2 -= cOrgK * dOrg; organicC += cOrgK * dOrg                              # 守恒:合成扣CO₂/降解还,记入有机碳库
+	organicC += dTot / float(SZ)                                                     # 均值入有机碳库(守恒:mean减=organicC增)
 	# 增长 + 本地适应 + 形态发育
 	for j in NLat:
 		var jb := j * NLon
@@ -589,18 +614,31 @@ func carbonStep() -> void:
 	var bio := 0.0
 	for k in SZ: bio += N[k]
 	# 碳:4 库(大气 globalCO2 / 海洋 ocnC / 化石 fosC / 岩石+地幔 rockC)间只搬运,总量守恒
-	rockC -= volcOut; globalCO2 += volcOut                                       # 火山:岩石/地幔→大气
+	# 大气 CO2 局部化(每格 Co2[k]=该格大气碳,ΣCo2=大气总量,extensive 守恒):
+	# 火山/化石氧化注入,风化(陆)/海气(海)/埋藏(生命)逐格作用;rockC/ocnC/fosC 为总量库。
+	rockC -= volcOut                                                              # 火山:岩石→大气
 	var pulse: float = VPULSE_A if (geoT > 0 and geoT % VPULSE_T == 0) else 0.0
-	rockC -= pulse; globalCO2 += pulse                                           # 暗色岩省脉冲(也从岩石库)
-	var tempf := clampf(1.0 + 0.06 * (globalCO2 - CO2ref), 0.4, 3.0)             # 暖→风化快(碳硅酸盐恒温器负反馈)
-	var wq: float = min(globalCO2, weatherK * (globalCO2 / CO2ref) * tempf)
-	globalCO2 -= wq; rockC += wq                                                 # 风化:大气→岩石(碳酸盐埋藏)
-	var dOcn := seaExK * (globalCO2 - ocnC); globalCO2 -= dOcn; ocnC += dOcn     # 海气交换:趋平衡
-	var bury: float = min(globalCO2, buryK * clampf(bio / 5000.0, 0.0, 2.0))
-	globalCO2 -= bury; fosC += bury                                              # 生物碳泵(∝生物量):大气→化石,放 O₂
-	var oxid := foxCK * fosC; fosC -= oxid; globalCO2 += oxid                    # 化石出露氧化:化石→大气
+	rockC -= pulse                                                               # 暗色岩省脉冲
+	var oxid := foxCK * fosC; fosC -= oxid                                        # 化石出露氧化→大气
+	var injPer := volcOut + pulse + oxid                                          # 每格大气注入(mean += injPer)
+	var wTot := 0.0; var oTot := 0.0; var bTot := 0.0
+	for k in SZ:
+		var c := Co2[k] + injPer
+		var tempf := clampf(1.0 + 0.06 * (c - CO2ref), 0.4, 3.0)                 # 暖→风化快(恒温器负反馈)
+		var wq: float = minf(c, weatherK * (c / CO2ref) * tempf)
+		c -= wq; wTot += wq                                                      # 风化:所有格大气→岩石(陆地碳硅酸盐+海底风化,恒温器汇)
+		if Land[k] == 0:
+			var dOcn := seaExK * (c - ocnC); c -= dOcn; oTot += dOcn             # 海洋额外:海气交换趋平衡
+		var bury: float = minf(c, buryK * clampf(N[k] / 12.0, 0.0, 2.0))
+		c -= bury; bTot += bury                                                  # 生物碳泵:大气→化石,放 O₂
+		Co2[k] = maxf(0.0, c)
+	rockC += wTot / float(SZ); ocnC += oTot / float(SZ); fosC += bTot / float(SZ) # 汇均值入全局库(守恒:mean减=库增)
+	_diffuse(Co2, co2Diff)                                                        # 大气混合
+	var sc := 0.0
+	for k in SZ: sc += Co2[k]
+	globalCO2 = sc / float(SZ)                                                    # 全局指标=场均浓度
 	# 氧(GOE):净埋藏有机碳=放等量 O₂;先被火山还原气 + 还原缓冲库吃,库耗尽才阈值式跃升
-	var avail := bury
+	var avail := bTot / float(SZ)                                                 # 每格均值量纲(对齐全局 O₂/还原库)
 	var byGas: float = min(avail, o2ResupD); avail -= byGas
 	var byRed: float = min(avail, globalRed * 0.02); avail -= byRed; globalRed = max(0.0, globalRed - byRed)
 	globalO2 = clampf(globalO2 + avail - o2RespK * globalO2, 0.0, 21.0)
@@ -666,13 +704,13 @@ func stepGeo() -> void:
 	impactWinter = maxf(0.0, impactWinter * (1.0 - impactDecay))                       # 撞击冬天逐年衰减(尘埃沉降)
 	if geoT % IMPACT_T == 0:                                                           # 确定性周期撞击
 		impactWinter += IMPACT_WINTER
-		var ic: float = minf(rockC, IMPACT_CO2); rockC -= ic; globalCO2 += ic          # 撞击气化注碳(岩石/地幔→大气,守恒)
+		var ic: float = minf(rockC, IMPACT_CO2); rockC -= ic; for ck in SZ: Co2[ck] += ic   # 撞击气化注碳(岩石→每格大气,守恒)
 		_push_event("☄", "天体撞击 · 撞击冬天 + 注碳脉冲")
 	if geo != null:
 		var erupt: int = geo.tectonics()        # 火山抬升/侵蚀改高程
 		if erupt > 0:                            # 喷发注碳(岩石/地幔→大气,守恒)
 			var pulse: float = min(rockC, erupt * 0.5)
-			rockC -= pulse; globalCO2 += pulse
+			rockC -= pulse; for ck in SZ: Co2[ck] += pulse                             # 火山喷发注碳(岩石→每格大气,守恒)
 	_seaStep()
 	carbonStep()
 	elementStep()
@@ -710,7 +748,7 @@ func bodyPlan(j: int, i: int) -> String:
 func spinUp() -> void:
 	initClimate()
 	N = gridF(0.0); H = gridF(0.0); C = gridF(0.0); Hab = gridF(0.0); Topt = gridF(0.0); Salt = gridF(0.0); Dry = gridF(0.0)
-	Org = gridF(0.0)
+	Org = gridF(0.0); Prot = gridF(0.0); Lip = gridF(0.0)
 	spId = PackedInt32Array(); spId.resize(SZ)
 	rSex = gridF(0.0); Par = gridF(0.0)
 	Sym = gridF(0.0); Seg = gridF(0.0); Limb = gridF(0.0); Axis = gridF(0.0)
@@ -718,7 +756,7 @@ func spinUp() -> void:
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
 	MOC = 1.0; geoT = 0; climCool = 0.0; globalCO2 = 2.0; impactWinter = 0.0
 	iceVol = 0.0; refIce = -1.0; seaOffset = 0.0
-	ocnC = 2.0; fosC = 0.0; rockC = 10000.0; globalO2 = 0.0; globalRed = 4.0; atmN2 = 1000.0; availN = 2.0; organicC = 0.0
+	Co2 = gridF(CO2ref); ocnC = 2.0; fosC = 0.0; rockC = 10000.0; globalO2 = 0.0; globalRed = 4.0; atmN2 = 1000.0; availN = 2.0; organicC = 0.0
 	disE = PackedFloat64Array(); disE.resize(SZ * NE)
 	depE = PackedFloat64Array(); depE.resize(SZ * NE)
 	subPoolE = PackedFloat64Array(); subPoolE.resize(NE)

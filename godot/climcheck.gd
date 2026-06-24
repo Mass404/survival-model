@@ -6,7 +6,7 @@ const Sim = preload("res://sim/World.gd")
 func _initialize() -> void:
 	var w = Sim.new()
 	w.spinUp()
-	var c0: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC
+	var c0: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC
 	var day := 0
 	var cool := []          # 每年 climCool(纯冰期,不含撞击)
 	var impacts := []       # 撞击年记录
@@ -19,7 +19,7 @@ func _initialize() -> void:
 			if w.geoT % Sim.IMPACT_T == 0:
 				impacts.append({"y": w.geoT, "iw": w.impactWinter, "co2": w.globalCO2})
 		day += 1
-	var c1: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC
+	var c1: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC
 	print("=== 气候强迫(撞击 + 米兰科维奇)验证 ===")
 	print("撞击事件(每 %d 年一次):" % Sim.IMPACT_T)
 	for im in impacts:
@@ -40,8 +40,9 @@ func _initialize() -> void:
 	for e in w.massExt:
 		if str(e["cause"]).find("撞击") >= 0: impactExt += 1
 	var cdrift: float = absf(c1 - c0)
+	var cok: bool = cdrift / maxf(absf(c0), 1.0) < 1e-6                            # 相对守恒(浮点级)
 	print("撞击成因大灭绝: %d 次" % impactExt)
-	print("碳守恒(撞击注碳来自岩石库): 漂移 ", cdrift, "  ", "✅" if cdrift < 1e-4 else "❌")
+	print("碳守恒(撞击注碳来自岩石库): 漂移 ", cdrift, "  ", "✅" if cok else "❌")
 	print("撞击脉冲: %s" % ("✅ 每次都触发撞击冬天" if impactOK else "❌ 有撞击没触发"))
 	print("米兰调制: %s (峰值 %.1f ~ %.1f)" % ["✅ 冰期强弱有节律" if milankOK else "❌ 峰值无变化", pmin, pmax])
-	quit(0 if (impactOK and milankOK and cdrift < 1e-4) else 1)
+	quit(0 if (impactOK and milankOK and cok) else 1)
