@@ -172,6 +172,18 @@ const shellDef := 0.85       # 矿化壳防御
 const shellCost := 0.12      # 建壳成本
 const shellGrowCost := 0.2   # 建壳繁殖代价(gB)
 const shellAdaptK := 0.04    # 壳适应速率
+const neuroForage := 0.4     # 神经觅食增益(gB)
+const neuroEvade := 0.6      # 神经避敌(被捕食减免)
+const neuroSelCost := 0.08   # 神经成本
+const neuroAdaptK := 0.04    # 神经适应速率
+const endoSelCost := 0.12    # 温血成本
+const endoAdaptK := 0.04     # 温血适应速率
+const symbBenefit := 0.6     # 共生增益(gB)
+const symbCost := 0.18       # 共生成本
+const symbAdaptK := 0.04     # 共生适应速率
+const membBoost := 0.35      # 膜浓缩增殖增益(gB)
+const membAdaptK := 0.1      # 膜适应速率
+const cmc := 0.5             # 脂质临界胶束浓度(过CMC自组装膜泡)
 const MOVE := 0.12
 const FITW := 14.0
 const SALTW := 2.5
@@ -483,7 +495,8 @@ func stepLife(dt: float) -> void:
 			var o2f := clampf(globalO2 / o2half, 0.0, 1.0)
 			var aerB := 1.0 + aerBoost * clampf(rAero[k], 0.0, 1.0) * o2f + euBoost * clampf(rEuk[k], 0.0, 1.0) * o2f
 			var szSlow := 1.0 - sizeCost * clampf(rSize[k], 0.0, 1.0) * (1.0 - 0.5 * clampf(rEuk[k], 0.0, 1.0))
-			var gB := aerB * szSlow * Hab[k] * (1.0 - 0.3 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - diffRepCost * clampf(rDiff[k], 0.0, 1.0)) * (1.0 - shellGrowCost * clampf(rShell[k], 0.0, 1.0))   # ×多细胞/分化/壳 增殖代价
+			var memb := clampf(rMemb[k], 0.0, 1.0) if Lip[k] > cmc else 0.0
+			var gB := aerB * szSlow * Hab[k] * (1.0 - 0.3 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - diffRepCost * clampf(rDiff[k], 0.0, 1.0)) * (1.0 - shellGrowCost * clampf(rShell[k], 0.0, 1.0)) * (1.0 + neuroForage * clampf(rNeuro[k], 0.0, 1.0) * clampf(Sym[k], 0.0, 1.0)) * (1.0 + symbBenefit * clampf(rSymb[k], 0.0, 1.0) * clampf(1.0 - availN / 2.0, 0.0, 1.0)) * (1.0 + membBoost * memb)   # ×多细胞/分化/壳代价 ×神经/共生/膜增益
 			var wHet := rBirthK * (food / (food + rKhalf)) * fit * gB
 			var wChemo := rBirthAutoK * clampf(globalRed / 4.0, 0.0, 1.0) * co2a * fit * gB
 			var wPhoto := rBirthPhotoK * clampf(Hab[k] * 1.6, 0.0, 1.0) * co2a * fit * gB
@@ -521,6 +534,13 @@ func stepLife(dt: float) -> void:
 				rDiff[k] = clampf(rDiff[k] + diffAdaptK * dl * (muG * (0.6 + predP * 0.5) - diffCost), 0.0, 1.0)   # 多细胞×(稳定+捕食)→分化
 				var minAvail := clampf(disE[k * NE + 1] / 150.0, 0.0, 1.0)
 				rShell[k] = clampf(rShell[k] + shellAdaptK * dl * (muG * predP * minAvail - shellCost), 0.0, 1.0)   # 多细胞×捕食×钙→壳
+				var coldStress := clampf((12.0 - teff) / 24.0, 0.0, 1.0)
+				var nStress := clampf(1.0 - availN / 2.0, 0.0, 1.0)
+				rNeuro[k] = clampf(rNeuro[k] + neuroAdaptK * dl * (muG * clampf((Sym[k] + predP) / 1.5, 0.0, 1.0) - neuroSelCost), 0.0, 1.0)   # 多细胞×(运动+捕食)→神经
+				rEndo[k] = clampf(rEndo[k] + endoAdaptK * dl * (muG * coldStress - endoSelCost), 0.0, 1.0)   # 多细胞×冷胁迫→温血
+				rSymb[k] = clampf(rSymb[k] + symbAdaptK * dl * (nStress * symbBenefit - symbCost), 0.0, 1.0)   # 贫氮→共生固氮伙伴
+				var mb := 1.0 if Lip[k] > cmc else -1.0
+				rMemb[k] = clampf(rMemb[k] + membAdaptK * dl * mb, 0.0, 1.0)   # 脂质过CMC→膜泡
 			# 有性生殖加速适应(红皇后:有性投资→适应更快)
 			var sb: float = 1.0 + SEX_BOOST * rSex[k]
 			Topt[k] += min(0.99, aT * sb) * (teff - Topt[k])
@@ -581,7 +601,8 @@ func stepLife(dt: float) -> void:
 		var nv := N[k]
 		if H[k] < SEED and nv > FW_SEEDN: H[k] = SEED
 		if H[k] > 0.0:
-			var graze: float = min(FW_GRAZE * H[k] * (nv / (nv + FW_HALF)) * ds, nv * 0.5)
+			var szD: float = (1.0 - 0.6 * clampf(rSize[k], 0.0, 1.0)) * (1.0 - 0.9 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - shellDef * clampf(rShell[k], 0.0, 1.0)) * (1.0 - neuroEvade * clampf(rNeuro[k], 0.0, 1.0))   # 防御:体型/多细胞/壳/神经→减免被捕食
+			var graze: float = min(FW_GRAZE * H[k] * (nv / (nv + FW_HALF)) * szD * ds, nv * 0.5)
 			N[k] = nv - graze
 			H[k] = max(0.0, H[k] + FW_YIELD * graze - FW_MH * H[k] * ds)
 		var hv := H[k]
