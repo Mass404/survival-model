@@ -98,11 +98,11 @@ func _initialize() -> void:
 	var tun = ch.locs[3]["dep"]   # 苔原=玄武岩
 	var mtnUTh: float = float(mtn[23]) + float(mtn[24])
 	var tunUTh: float = float(tun[23]) + float(tun[24])
-	var mtnNi: float = float(mtn[28])
-	var tunNi: float = float(tun[28])
+	var mtnTi: float = float(mtn[27])   # 钛:基性岩富、极难溶→就地沉积(不被河流带走)
+	var tunTi: float = float(tun[27])
 	var conserved: bool = drift < 1e-6
-	var signature: bool = mtnUTh > tunUTh and tunNi > mtnNi and mtnUTh > 0.0 and tunNi > 0.0
-	print("L3 元素化学(漂移 %s · 花岗岩U+Th %.2f>%.2f · 玄武岩Ni %.2f>%.2f): 守恒%s 签名%s" % [str(drift), mtnUTh, tunUTh, tunNi, mtnNi, "✅" if conserved else "❌", "✅" if signature else "❌"])
+	var signature: bool = mtnUTh > tunUTh and tunTi > mtnTi and mtnUTh > 0.0 and tunTi > 0.0
+	print("L3 元素化学(漂移 %s · 花岗岩U+Th %.2f>%.2f · 玄武岩Ti %.2f>%.2f): 守恒%s 签名%s" % [str(drift), mtnUTh, tunUTh, tunTi, mtnTi, "✅" if conserved else "❌", "✅" if signature else "❌"])
 	var l3ok: bool = conserved and signature
 	print("L3 元素化学守恒+签名: %s" % ("✅" if l3ok else "❌"))
 
@@ -112,4 +112,13 @@ func _initialize() -> void:
 	var coastU: float = float(coast["dis"][23]) + float(coast["dep"][23])
 	var l4ok: bool = coastNi > 0.0 and coastU > 0.0
 	print("L4 河流搬运(海岸富集上游 Ni %.3f · U %.3f,自身岩性不产): %s" % [coastNi, coastU, "✅" if l4ok else "❌"])
-	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok) else 1)
+
+	# ⑨ L5 水文气象:冷地积雪(暖地无)、暖湿地闪电(确定性张弛)
+	var wx = LocalS.new(); wx.setup(w, g)
+	for d in 60: wx.step(1440)
+	var snowMtn: float = wx.locs[2]["snow"]; var snowTun: float = wx.locs[3]["snow"]; var snowCoast: float = wx.locs[0]["snow"]
+	var coldSnow: float = max(snowMtn, snowTun)
+	var warmLight: int = int(wx.locs[1]["lightning"]) + int(wx.locs[0]["lightning"])
+	var l5ok: bool = coldSnow > 0.5 and coldSnow > snowCoast + 0.5 and warmLight > 0
+	print("L5 水文气象(雪 山%.1f/苔%.1f/岸%.1f · 暖湿闪电%d次): %s" % [snowMtn, snowTun, snowCoast, warmLight, "✅" if l5ok else "❌"])
+	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok) else 1)

@@ -46,7 +46,7 @@ func _build() -> void:
 	locs = [
 		_mkloc("赤道海岸", 2.0, 150.0, "coast", "砂岩", 5.0, 0.8),
 		_mkloc("温带林", 40.0, 150.0, "forest", "黏土", 200.0, 1.6),
-		_mkloc("高山", 42.0, 156.0, "mountain", "花岗岩", 1800.0, 0.4),
+		_mkloc("高山", 42.0, 156.0, "mountain", "花岗岩", 3500.0, 0.4),
 		_mkloc("极地苔原", 76.0, 150.0, "tundra", "玄武岩", 100.0, 0.6),
 		_mkloc("洞穴", 40.0, 150.0, "cave", "石灰岩", 150.0, 0.0),
 	]
@@ -63,6 +63,31 @@ func _build() -> void:
 func _z33() -> Array:
 	var a := []; a.resize(Sim.NE); a.fill(0.0); return a
 
+const SNOW_T := 2.0   # 雪线温度(≤此值降水成雪,>此值消融)
+# 水文气象(逐小时):雪/冰川积累与消融(融雪补水)、海浪(风²)、风暴对流电荷→闪电(确定性张弛)
+func _weather_step(L: Dictionary) -> void:
+	if L["kind"] == "cave": return
+	var k: int = _cell(L["lat"], L["lon"])
+	var precip: float = world.P[k]
+	var temp: float = float(L["envTemp"])
+	if temp <= SNOW_T:
+		L["snow"] = float(L["snow"]) + precip * 0.5            # 降水成雪
+	else:
+		var melt: float = min(float(L["snow"]), (temp - SNOW_T) * 0.03)
+		L["snow"] = float(L["snow"]) - melt
+		L["Soil"] = min(float(L["soilCap"]), float(L["Soil"]) + melt * 0.5)  # 融雪补土壤水
+	if float(L["snow"]) > 40.0: L["glacier"] = float(L["glacier"]) + 0.01    # 久雪成冰川
+	# 风(昼夜温差/对流驱动)+ 海岸海浪(风²弛豫)
+	var wind: float = clampf(abs(temp - float(L["meanTemp"])) * 0.3 + 0.2, 0.0, 2.0)
+	L["wind"] = wind
+	if L["kind"] == "coast": L["wave"] = float(L["wave"]) * 0.9 + wind * wind * 0.1
+	# 风暴电荷(暖湿对流)→ 跨阈放电(确定性张弛)
+	var conv: float = clampf((temp - 15.0) / 15.0, 0.0, 1.0) * clampf(precip, 0.0, 1.2)
+	L["charge"] = float(L["charge"]) + conv * 0.1
+	if float(L["charge"]) > 1.0:
+		L["charge"] = 0.0
+		L["lightning"] = int(L["lightning"]) + 1
+
 # 逐地点元素化学(逐日):本地岩性 LITHO 驱动碳酸风化(岩→溶)→溶解度沉淀(溶→沉成矿)。逐元素守恒(rockE3→dis→dep)
 func _chem_step(L: Dictionary) -> void:
 	if L["kind"] == "cave": return
@@ -70,7 +95,7 @@ func _chem_step(L: Dictionary) -> void:
 	var rate: float = lith[0]
 	var vec = lith[1]
 	var k: int = _cell(L["lat"], L["lon"])
-	var act: float = rate * clampf(world.P[k], 0.0, 1.5) * clampf((float(L["envTemp"]) + 5.0) / 25.0, 0.0, 1.5) * max(0.1, world.globalCO2 / 2.0)
+	var act: float = rate * clampf(world.P[k], 0.0, 1.5) * clampf((float(L["envTemp"]) + 5.0) / 25.0, 0.1, 1.5) * max(0.1, world.globalCO2 / 2.0)
 	var dis: Array = L["dis"]
 	var dep: Array = L["dep"]
 	var water: float = max(0.1, float(L["Soil"]) / max(0.01, float(L["soilCap"])))
@@ -101,6 +126,7 @@ func _mkloc(nm: String, lat: float, lon: float, kind: String, lith: String, elev
 	return {"name": nm, "lat": lat, "lon": lon, "kind": kind, "lith": lith, "elev": elev,
 		"soilCap": soilCap, "Soil": soilCap * 0.5, "Lake": 0.0, "GW": 2.0,
 		"runoff": 0.0, "runoffAcc": 0.0, "spring": 0.0, "down": -1, "envTemp": 15.0, "meanTemp": 15.0,
+		"snow": 0.0, "glacier": 0.0, "charge": 0.0, "lightning": 0, "wind": 0.0, "wave": 0.0,
 		"food": 0.0, "water": 0.0, "foodCap": 0.0, "waterCap": 0.0}
 
 # 土壤水平衡(逐小时):降水补给→蒸发→满溢径流→深渗补地下水→地下水慢基流(旱季泉)
@@ -127,12 +153,11 @@ func _soil_step(L: Dictionary) -> void:
 	L["water"] = min(float(L["water"]) + wcap * 0.12, wcap)
 
 # PushBoundary:全球行星某(纬,经)的有效气温 → 地点日均环境温(地形调制)
-func _mean_temp(lat: float, lon: float, kind: String) -> float:
-	var j: int = clampi(int((lat + 90.0) / 180.0 * Sim.NLat), 0, Sim.NLat - 1)
-	var i: int = ((int(lon / 360.0 * Sim.NLon)) % Sim.NLon + Sim.NLon) % Sim.NLon
-	var t: float = world.Teff(j, i)
-	match kind:
-		"mountain": t -= 12.0                       # 高程递减
+func _mean_temp(L: Dictionary) -> float:
+	var j: int = clampi(int((float(L["lat"]) + 90.0) / 180.0 * Sim.NLat), 0, Sim.NLat - 1)
+	var i: int = ((int(float(L["lon"]) / 360.0 * Sim.NLon)) % Sim.NLon + Sim.NLon) % Sim.NLon
+	var t: float = world.Teff(j, i) - float(L["elev"]) * 0.0065   # 高程递减(6.5℃/km,所有地点)
+	match L["kind"]:
 		"cave": t = 0.7 * t + 0.3 * 12.0            # 洞穴趋恒温
 		"coast": t = 0.85 * t + 0.15 * 18.0         # 海洋调节
 		"tundra": t -= 2.0
@@ -160,14 +185,15 @@ func _inst_temp(L: Dictionary) -> float:
 	var doy: int = int(float(total) / 1440.0) % Sim.YEAR
 	var sf := _sun_flux(L["lat"], doy)
 	var amp: float = DIURNAL.get(L["kind"], 8.0)
-	return float(L["meanTemp"]) + amp * (sf - 0.35)
+	var snowCool: float = clampf(float(L["snow"]) / 8.0, 0.0, 1.0) * 4.0   # 雪盖反照率致冷(正反馈)
+	return float(L["meanTemp"]) + amp * (sf - 0.35) - snowCool
 
 func _update_temps() -> void:
 	for L in locs: L["envTemp"] = _inst_temp(L)
 
 func _push_boundary() -> void:
 	for L in locs:
-		L["meanTemp"] = _mean_temp(L["lat"], L["lon"], L["kind"])
+		L["meanTemp"] = _mean_temp(L)
 		# 资源:食物=当地植被(全球 N 生物量) + 海岸海产;水=降水(淡水)。按容量再生
 		var k: int = _cell(L["lat"], L["lon"])
 		var veg: float = world.N[k] + world.H[k] * 0.5     # 生产者+食草(可猎)
@@ -213,6 +239,7 @@ func step(minutes: int) -> void:
 			_push_boundary()
 			_update_temps()
 			for L in locs: _soil_step(L)              # 土壤水/地下水平衡
+			for L in locs: _weather_step(L)           # 雪冰/海浪/风暴闪电
 			if auto_forage and traveling == null: forage(1)
 			var env: float = cur_loc()["envTemp"]
 			var act: float = 1.4 if traveling != null else 1.0   # 旅途更耗
