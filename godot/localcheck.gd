@@ -144,4 +144,14 @@ func _initialize() -> void:
 	var laterite: bool = forestAl > forestNa * 3.0 and forestAl > 0.0
 	var l7ok: bool = placer and laterite
 	print("L7 成矿(砂矿:海岸Ti%.2f>苔原%.2f · 红土:林Al%.2f≫Na%.2f): 砂矿%s 红土%s" % [coastTi, tunTiP, forestAl, forestNa, "✅" if placer else "❌", "✅" if laterite else "❌"])
-	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok and l6ok and l7ok) else 1)
+
+	# ⑫ L8 局部地质:地震发生 + 沉积固结成沉积岩(成分分类)。守恒已在 L3 验
+	var quakes := 0
+	var lithified := 0
+	var sedLith := ""
+	for L in ch.locs:
+		quakes += int(L["quakes"])
+		if L["lithified"]: lithified += 1; sedLith = L["lith"]
+	var l8ok: bool = quakes > 0 and lithified > 0
+	print("L8 局部地质(地震%d次 · 固结成岩%d处 例[%s]): %s" % [quakes, lithified, sedLith, "✅" if l8ok else "❌"])
+	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok and l6ok and l7ok and l8ok) else 1)
