@@ -31,4 +31,21 @@ func _initialize() -> void:
 	print("土壤湿度气候分异: %s" % ("✅" if spatial else "❌"))
 	print("地下水积累: %s" % ("✅" if gw_ok else "❌"))
 	print("径流(供河网): %s" % ("✅" if ro_ok else "❌"))
-	quit(0 if (spatial and gw_ok and ro_ok) else 1)
+
+	# G3 河网下游富集:低高程(河口/下游)溶解载量 > 高高程(源头),河网把溶质往下游搬
+	var pairs := []
+	for k in Sim.SZ:
+		if w.Land[k] == 0: continue
+		var load := 0.0
+		for e in Sim.NE: load += w.disE[k * Sim.NE + e]
+		pairs.append([w.Elev[k], load])
+	pairs.sort_custom(func(a, b): return a[0] < b[0])
+	var n := pairs.size()
+	var third: int = max(1, n / 3)
+	var lowLoad := 0.0; var highLoad := 0.0
+	for x in third: lowLoad += pairs[x][1]
+	for x in range(n - third, n): highLoad += pairs[x][1]
+	lowLoad /= third; highLoad /= third
+	var river_ok: bool = lowLoad > highLoad * 1.2
+	print("G3 河网(下游低地溶解载量 %.1f > 源头高地 %.1f): %s" % [lowLoad, highLoad, "✅" if river_ok else "❌"])
+	quit(0 if (spatial and gw_ok and ro_ok and river_ok) else 1)
