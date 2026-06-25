@@ -18,7 +18,34 @@ var total := 0                # 分钟计数
 var auto_forage := false      # 开则每小时自动觅食(供验证/简单 AI)
 # 天体配置(支持多恒星;默认单日地球态)。flux 相对地球, dayLen 自转周期(分钟), phase 相位
 var SUNS := [{"flux": 1.0, "dayLen": 1440.0, "phase": 0.0}]
-var MOONS := [{"period": 27.3, "amp": 0.4, "bright": 0.25}]   # 卫星:周期(天)/潮汐振幅/夜光亮度(支持多卫星)
+var MOONS := [{"period": 27.3, "amp": 0.4, "bright": 0.25, "inc": 5.14, "angR": 0.259, "distKm": 384400.0}]   # 卫星:周期/潮汐/夜光/轨道倾角/角半径/距离(后三供日月食)
+const SUNANG := 0.266      # 太阳角半径(度)
+const PLANET_R := 6371.0   # 行星半径 km
+var eclSolar := 0.0        # 当前日食遮挡比例(全局)
+var eclLunar := 0.0        # 当前月食遮挡比例
+
+# 移植 world.html eclipseCover:日食(新月遮日)/月食(满月入地影)的遮挡比例。交点+倾角→确定性稀少
+func _eclipse_cover(lunar: bool) -> float:
+	var cov := 0.0
+	var t := float(total) / 1440.0
+	for o in MOONS:
+		var period := float(o["period"])
+		var f := fmod(fmod(t / period, 1.0) + 1.0, 1.0)
+		var beta := float(o.get("inc", 0.0)) * sin(2.0 * PI * (t / (period * 0.9215)) + 0.37)
+		var angR := float(o.get("angR", 0.0))
+		if not lunar:
+			var dlon := 360.0 * (f if f < 0.5 else f - 1.0)
+			var sep := sqrt(dlon * dlon + beta * beta)
+			if sep >= SUNANG + angR: continue
+			var c: float = min(1.0, pow(angR / SUNANG, 2.0)) if sep <= abs(angR - SUNANG) else min(1.0, (SUNANG + angR - sep) / (2.0 * SUNANG))
+			cov = max(cov, c)
+		else:
+			var um := atan(PLANET_R / float(o.get("distKm", 384400.0))) * 180.0 / PI - SUNANG
+			var dlon := 360.0 * (f - 0.5)
+			var sep := sqrt(dlon * dlon + beta * beta)
+			if sep >= um + angR: continue
+			cov = max(cov, 1.0 if sep <= abs(um - angR) else clampf((um + angR - sep) / (2.0 * angR), 0.0, 1.0))
+	return cov
 const SOLAR_TIDE := 0.18   # 太阳半日潮振幅
 var RING = null            # 行星环(默认无):{inner,outer,opacity,glow},内外半径(行星半径计)/不透明度/反照
 var ringShineNow := 0.0    # 当前环光夜照(全局)
@@ -136,6 +163,7 @@ func _celestial() -> void:
 	moonIllum = (1.0 - cos(2.0 * PI * fp)) / 2.0     # 月相:0新月..1满月
 	var doy: int = int(float(total) / 1440.0) % Sim.YEAR
 	ringShineNow = _ring_shine(float(cur_loc()["lat"]) * PI / 180.0, world.decl(doy) * PI / 180.0)   # 环光夜照
+	eclSolar = _eclipse_cover(false); eclLunar = _eclipse_cover(true)   # 日/月食遮挡
 
 # 辐射剂量(per loc):磁层屏蔽赤道强、两极弱(磁漏斗)→极区高;高海拔薄气→更高
 func _radiation(lat: float, elev: float) -> float:
@@ -265,7 +293,7 @@ func _sun_flux(lat: float, doy: int) -> float:
 		var hangle := 2.0 * PI * frac - PI
 		var e := sin(phi) * sin(de) + cos(phi) * cos(de) * cos(hangle)
 		if e > 0.0: s += float(su["flux"]) * e
-	return s * (1.0 - _ring_shadow(phi, de))   # 环影削日照
+	return s * (1.0 - _ring_shadow(phi, de)) * (1.0 - _eclipse_cover(false))   # 环影 + 日食 削日照
 
 # 瞬时温 = 日均(全球喂)+ 昼夜摆动(太阳几何驱动:正午暖/夜里冷)
 func _inst_temp(L: Dictionary) -> float:
