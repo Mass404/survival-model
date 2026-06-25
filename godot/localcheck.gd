@@ -104,4 +104,12 @@ func _initialize() -> void:
 	var signature: bool = mtnUTh > tunUTh and tunNi > mtnNi and mtnUTh > 0.0 and tunNi > 0.0
 	print("L3 元素化学(漂移 %s · 花岗岩U+Th %.2f>%.2f · 玄武岩Ni %.2f>%.2f): 守恒%s 签名%s" % [str(drift), mtnUTh, tunUTh, tunNi, mtnNi, "✅" if conserved else "❌", "✅" if signature else "❌"])
 	var l3ok: bool = conserved and signature
-	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok) else 1)
+	print("L3 元素化学守恒+签名: %s" % ("✅" if l3ok else "❌"))
+
+	# ⑧ L4 河流下游搬运:海岸(砂岩,自身不产Ni/U)富集上游(玄武岩Ni、花岗岩U/Th)经河流带来的元素
+	var coast = ch.locs[0]   # 海岸=下游终点(砂岩)
+	var coastNi: float = float(coast["dis"][28]) + float(coast["dep"][28])
+	var coastU: float = float(coast["dis"][23]) + float(coast["dep"][23])
+	var l4ok: bool = coastNi > 0.0 and coastU > 0.0
+	print("L4 河流搬运(海岸富集上游 Ni %.3f · U %.3f,自身岩性不产): %s" % [coastNi, coastU, "✅" if l4ok else "❌"])
+	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok) else 1)

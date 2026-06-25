@@ -31,6 +31,7 @@ const ELITHO := {
 const ESOL3 := [8.0,0.4,2.0,3.0,0.05,9.0,1.2,0.6,0.08,0.03,12.0,0.2,0.002,0.004,0.003,0.0005,0.5,0.1,10.0,0.05,0.001,1.5,0.8,0.01,0.0002,0.001,0.3,0.0005,0.05,0.02,0.4,0.05,0.3]
 const WK3 := 0.0006
 const CHEM_SCALE := 1500.0   # world.html 逐分钟率折算到逐日步(数值验证调)
+const RIVER_K := 0.4         # 径流带走溶解元素的比例系数
 var rockE3 := PackedFloat64Array()    # 局部层岩石源(NE,守恒)
 var subPoolE3 := PackedFloat64Array() # 俯冲池(供 L7/海洋汇)
 
@@ -82,10 +83,24 @@ func _chem_step(L: Dictionary) -> void:
 			var pp: float = (dis[e] - cap) * 0.3
 			dis[e] -= pp; dep[e] += pp
 
+# 河流(逐日):径流把溶解元素顺流带向下游(高→低),下游富集上游风化产物。守恒(loc→loc)
+func _river_step() -> void:
+	for L in locs:
+		var dn: int = L["down"]
+		if dn < 0: continue
+		var frac: float = clampf(float(L["runoffAcc"]) * RIVER_K, 0.0, 0.3)
+		L["runoffAcc"] = 0.0
+		if frac <= 0.0: continue
+		var dis: Array = L["dis"]
+		var ddn: Array = locs[dn]["dis"]
+		for e in Sim.NE:
+			var mv: float = dis[e] * frac
+			dis[e] -= mv; ddn[e] += mv
+
 func _mkloc(nm: String, lat: float, lon: float, kind: String, lith: String, elev: float, soilCap: float) -> Dictionary:
 	return {"name": nm, "lat": lat, "lon": lon, "kind": kind, "lith": lith, "elev": elev,
 		"soilCap": soilCap, "Soil": soilCap * 0.5, "Lake": 0.0, "GW": 2.0,
-		"runoff": 0.0, "spring": 0.0, "down": -1, "envTemp": 15.0, "meanTemp": 15.0,
+		"runoff": 0.0, "runoffAcc": 0.0, "spring": 0.0, "down": -1, "envTemp": 15.0, "meanTemp": 15.0,
 		"food": 0.0, "water": 0.0, "foodCap": 0.0, "waterCap": 0.0}
 
 # 土壤水平衡(逐小时):降水补给→蒸发→满溢径流→深渗补地下水→地下水慢基流(旱季泉)
@@ -104,6 +119,7 @@ func _soil_step(L: Dictionary) -> void:
 		deep = 0.03 * (float(L["Soil"]) - 0.7 * float(L["soilCap"])); L["Soil"] = float(L["Soil"]) - deep; L["GW"] = float(L["GW"]) + deep
 	var spring: float = 0.015 * float(L["GW"]); L["GW"] = float(L["GW"]) - spring
 	L["runoff"] = runoff; L["spring"] = spring
+	L["runoffAcc"] = float(L["runoffAcc"]) + runoff   # 累积径流,供河流逐日搬运
 	# 可饮水(mL)= 土壤饱和度×蓄水 + 地下水基流泉(旱季缓冲) + 海岸取水
 	var sat: float = float(L["Soil"]) / max(0.01, float(L["soilCap"]))
 	var wcap: float = sat * 2000.0 + spring * 8000.0 + (500.0 if L["kind"] == "coast" else 0.0)
@@ -201,5 +217,6 @@ func step(minutes: int) -> void:
 			var env: float = cur_loc()["envTemp"]
 			var act: float = 1.4 if traveling != null else 1.0   # 旅途更耗
 			body.step(1, env, act)
-		if total % 1440 == 0:                        # 每天:逐地点元素化学(慢过程)
+		if total % 1440 == 0:                        # 每天:逐地点元素化学 + 河流下游搬运
 			for L in locs: _chem_step(L)
+			_river_step()
