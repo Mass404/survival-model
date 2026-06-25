@@ -27,16 +27,48 @@ func setup(w, g) -> void:
 	_build()
 
 func _build() -> void:
+	# 每地点全态:岩性(LITHO 6种)/高程/土壤容量/土壤水/湖/地下水。岩性按地形配(洞穴=石灰岩)
 	locs = [
-		{"name": "赤道海岸", "lat": 2.0, "lon": 150.0, "kind": "coast"},
-		{"name": "温带林", "lat": 40.0, "lon": 150.0, "kind": "forest"},
-		{"name": "高山", "lat": 42.0, "lon": 156.0, "kind": "mountain"},
-		{"name": "极地苔原", "lat": 76.0, "lon": 150.0, "kind": "tundra"},
-		{"name": "洞穴", "lat": 40.0, "lon": 150.0, "kind": "cave"},
+		_mkloc("赤道海岸", 2.0, 150.0, "coast", "砂岩", 5.0, 0.8),
+		_mkloc("温带林", 40.0, 150.0, "forest", "黏土", 200.0, 1.6),
+		_mkloc("高山", 42.0, 156.0, "mountain", "花岗岩", 1800.0, 0.4),
+		_mkloc("极地苔原", 76.0, 150.0, "tundra", "玄武岩", 100.0, 0.6),
+		_mkloc("洞穴", 40.0, 150.0, "cave", "石灰岩", 150.0, 0.0),
 	]
 	routes = [[0, 1, 600], [1, 2, 400], [1, 4, 120], [1, 3, 1200]]
+	# 下游:高→低(高山→林→海岸),供 L4 河流搬运
+	locs[2]["down"] = 1; locs[1]["down"] = 0; locs[3]["down"] = 1
 	_push_boundary()
 	_update_temps()
+	for L in locs: _soil_step(L)
+
+func _mkloc(nm: String, lat: float, lon: float, kind: String, lith: String, elev: float, soilCap: float) -> Dictionary:
+	return {"name": nm, "lat": lat, "lon": lon, "kind": kind, "lith": lith, "elev": elev,
+		"soilCap": soilCap, "Soil": soilCap * 0.5, "Lake": 0.0, "GW": 2.0,
+		"runoff": 0.0, "spring": 0.0, "down": -1, "envTemp": 15.0, "meanTemp": 15.0,
+		"food": 0.0, "water": 0.0, "foodCap": 0.0, "waterCap": 0.0}
+
+# 土壤水平衡(逐小时):降水补给→蒸发→满溢径流→深渗补地下水→地下水慢基流(旱季泉)
+func _soil_step(L: Dictionary) -> void:
+	if L["kind"] == "cave":
+		L["waterCap"] = 60.0; L["water"] = 60.0; return   # 洞穴滴水:微量恒定
+	var k: int = _cell(L["lat"], L["lon"])
+	var precip: float = world.P[k]
+	var temp: float = L["envTemp"]
+	L["Soil"] = float(L["Soil"]) + precip * 0.6 - (max(0.0, temp) * 0.012 + 0.03)
+	var runoff := 0.0
+	if L["Soil"] > L["soilCap"]: runoff = float(L["Soil"]) - float(L["soilCap"]); L["Soil"] = L["soilCap"]
+	if L["Soil"] < 0.0: L["Soil"] = 0.0
+	var deep := 0.0
+	if float(L["Soil"]) > 0.7 * float(L["soilCap"]):
+		deep = 0.03 * (float(L["Soil"]) - 0.7 * float(L["soilCap"])); L["Soil"] = float(L["Soil"]) - deep; L["GW"] = float(L["GW"]) + deep
+	var spring: float = 0.015 * float(L["GW"]); L["GW"] = float(L["GW"]) - spring
+	L["runoff"] = runoff; L["spring"] = spring
+	# 可饮水(mL)= 土壤饱和度×蓄水 + 地下水基流泉(旱季缓冲) + 海岸取水
+	var sat: float = float(L["Soil"]) / max(0.01, float(L["soilCap"]))
+	var wcap: float = sat * 2000.0 + spring * 8000.0 + (500.0 if L["kind"] == "coast" else 0.0)
+	L["waterCap"] = wcap
+	L["water"] = min(float(L["water"]) + wcap * 0.12, wcap)
 
 # PushBoundary:全球行星某(纬,经)的有效气温 → 地点日均环境温(地形调制)
 func _mean_temp(lat: float, lon: float, kind: String) -> float:
@@ -84,11 +116,8 @@ func _push_boundary() -> void:
 		var k: int = _cell(L["lat"], L["lon"])
 		var veg: float = world.N[k] + world.H[k] * 0.5     # 生产者+食草(可猎)
 		if L["kind"] == "coast": veg += 8.0                # 海产
-		var precip: float = world.P[k]
 		L["foodCap"] = veg * 60.0                          # kcal 容量
-		L["waterCap"] = precip * 2500.0 + (300.0 if L["kind"] == "coast" else 0.0)
-		L["food"] = min(L.get("food", L["foodCap"] * 0.5) + L["foodCap"] * 0.03, L["foodCap"])
-		L["water"] = min(L.get("water", L["waterCap"] * 0.5) + L["waterCap"] * 0.06, L["waterCap"])
+		L["food"] = min(float(L["food"]) + L["foodCap"] * 0.04, L["foodCap"])  # 水由 _soil_step 算
 
 # 觅食:从当前地点采集食物/水喂给身体(消耗地点存量,会再生)
 func forage(hours: int) -> void:
@@ -127,6 +156,7 @@ func step(minutes: int) -> void:
 		if total % 60 == 0:                          # 每小时:刷新边界(日均)+ 昼夜瞬时温 + 觅食 + 身体
 			_push_boundary()
 			_update_temps()
+			for L in locs: _soil_step(L)              # 土壤水/地下水平衡
 			if auto_forage and traveling == null: forage(1)
 			var env: float = cur_loc()["envTemp"]
 			var act: float = 1.4 if traveling != null else 1.0   # 旅途更耗

@@ -69,4 +69,15 @@ func _initialize() -> void:
 	print("身体在局部气候推进+断供致死(存活 %dh,因:%s): %s" % [survived_h, loc.body.deathCause, "✅" if bodyworks else "❌"])
 	print("玩家旅行到目标地点: %s" % ("✅" if traveled else "❌"))
 	print("觅食生存闭环(温带林觅食者活过30天 / 断供者死@%dh): %s" % [idle.body.hoursAlive, "✅" if loop_works else "❌"])
-	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight) else 1)
+
+	# ⑥ L2 每地点全态:岩性多样 + 高程多样 + 地下水基流泉运转 + 土壤水有界
+	var liths := {}; var elevs := {}
+	var hasSpring := false; var bounded := true
+	for L in fora.locs:
+		liths[L["lith"]] = true; elevs[L["elev"]] = true
+		if float(L["spring"]) > 0.0: hasSpring = true
+		var s: float = float(L["Soil"])
+		if s < -0.001 or s > float(L["soilCap"]) + 0.001: bounded = false
+	var l2ok: bool = liths.size() >= 4 and elevs.size() >= 4 and hasSpring and bounded
+	print("L2 全态(岩性%d种 · 高程%d档 · 地下水基流泉%s · 土壤水有界%s): %s" % [liths.size(), elevs.size(), str(hasSpring), str(bounded), "✅" if l2ok else "❌"])
+	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok) else 1)
