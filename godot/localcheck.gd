@@ -136,4 +136,12 @@ func _initialize() -> void:
 	var radEq: float = ast.locs[0]["radiation"]
 	var l6ok: bool = (tMax - tMin) > 0.1 and (mMax - mMin) > 0.5 and radPolar > radEq
 	print("L6 天文(潮差%.2f · 月相%.2f→%.2f · 辐射极%.2f>赤%.2f): %s" % [tMax - tMin, mMin, mMax, radPolar, radEq, "✅" if l6ok else "❌"])
-	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok and l6ok) else 1)
+
+	# ⑪ L7 成矿:砂矿(重矿 Ti 固体随河富集于下游终点海岸 > 上游)+ 红土残积(暖湿:不溶 Al 残留 ≫ 可溶 Na 淋失)
+	var coastTi: float = float(ch.locs[0]["dep"][27]); var tunTiP: float = float(ch.locs[3]["dep"][27])
+	var forestAl: float = float(ch.locs[1]["dep"][25]); var forestNa: float = float(ch.locs[1]["dep"][0])
+	var placer: bool = coastTi > tunTiP and coastTi > 0.0
+	var laterite: bool = forestAl > forestNa * 3.0 and forestAl > 0.0
+	var l7ok: bool = placer and laterite
+	print("L7 成矿(砂矿:海岸Ti%.2f>苔原%.2f · 红土:林Al%.2f≫Na%.2f): 砂矿%s 红土%s" % [coastTi, tunTiP, forestAl, forestNa, "✅" if placer else "❌", "✅" if laterite else "❌"])
+	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok and l6ok and l7ok) else 1)

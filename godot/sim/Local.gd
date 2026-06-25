@@ -37,6 +37,8 @@ const ESOL3 := [8.0,0.4,2.0,3.0,0.05,9.0,1.2,0.6,0.08,0.03,12.0,0.2,0.002,0.004,
 const WK3 := 0.0006
 const CHEM_SCALE := 1500.0   # world.html 逐分钟率折算到逐日步(数值验证调)
 const RIVER_K := 0.4         # 径流带走溶解元素的比例系数
+const PLACER := [15, 12, 27] # 砂矿:金/锡/钛(重稳矿物,固体随河搬运、下游富集)
+const LATER := [4, 25, 26, 27, 28, 29]  # 红土残积:铁/铝/锰/钛/镍/铬(暖湿淋滤后残留)
 var rockE3 := PackedFloat64Array()    # 局部层岩石源(NE,守恒)
 var subPoolE3 := PackedFloat64Array() # 俯冲池(供 L7/海洋汇)
 
@@ -143,6 +145,12 @@ func _river_step() -> void:
 		for e in Sim.NE:
 			var mv: float = dis[e] * frac
 			dis[e] -= mv; ddn[e] += mv
+		# 砂矿:重稳矿物(Au/Sn/Ti)固体随河搬运→下游低能段富集(守恒)
+		var dep: Array = L["dep"]
+		var depDn: Array = locs[dn]["dep"]
+		for e in PLACER:
+			var mv2: float = dep[e] * frac * 0.5
+			dep[e] -= mv2; depDn[e] += mv2
 
 func _mkloc(nm: String, lat: float, lon: float, kind: String, lith: String, elev: float, soilCap: float) -> Dictionary:
 	return {"name": nm, "lat": lat, "lon": lon, "kind": kind, "lith": lith, "elev": elev,
