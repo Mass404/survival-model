@@ -12,8 +12,10 @@ var geo
 var locs := []                # {name,lat,lon,kind,envTemp}
 var routes := []              # [a,b,分钟]
 var player := 0
+var player_k := -1            # 统一模式:玩家所在全球格索引(cell_mode 下为真相;-1=旧 5 地点模式)
+var cell_mode := false        # true=两层统一(全球任意格);false=旧 5 写死地点(向后兼容)
 var body                      # Body 实例(玩家身体)
-var traveling = null          # {to,left,tot}
+var traveling = null          # {to,left,tot};cell_mode 下 to=目标全球格索引,否则=locs 索引
 var total := 0                # 分钟计数
 var auto_forage := false      # 开则每小时自动觅食(供验证/简单 AI)
 # 天体配置(支持多恒星;默认单日地球态)。flux 相对地球, dayLen 自转周期(分钟), phase 相位
@@ -326,10 +328,48 @@ func enter_cell(lat: float, lon: float) -> int:
 	locs = [L]
 	routes = []
 	player = 0
+	player_k = _cell(lat, lon)
+	cell_mode = true
 	rockE3 = PackedFloat64Array(); rockE3.resize(Sim.NE); rockE3.fill(1.0e6)
 	subPoolE3 = PackedFloat64Array(); subPoolE3.resize(Sim.NE)
 	_push_boundary(); _update_temps(); _soil_step(L)
 	return player
+
+# ============ U2:全球网格邻接移动(取代写死路线;旅行时间 ∝ 大圆距离) ============
+const WALK_KMH := 4.5         # 步行速度(km/h);粗格跨度大→格间动辄数日,符合行星尺度(可调)
+func _cell_center(k: int) -> Array:
+	var j: int = k / Sim.NLon; var i: int = k % Sim.NLon
+	return [-90.0 + (j + 0.5) * 180.0 / Sim.NLat, (i + 0.5) * 360.0 / Sim.NLon]
+
+# 两格中心大圆距离(km)。haversine,半径用行星 PLANET_R
+func _gc_km(k1: int, k2: int) -> float:
+	var a: Array = _cell_center(k1); var b: Array = _cell_center(k2)
+	var la1: float = a[0] * PI / 180.0; var la2: float = b[0] * PI / 180.0
+	var dla: float = (b[0] - a[0]) * PI / 180.0; var dlo: float = (b[1] - a[1]) * PI / 180.0
+	var h: float = sin(dla / 2.0) * sin(dla / 2.0) + cos(la1) * cos(la2) * sin(dlo / 2.0) * sin(dlo / 2.0)
+	return PLANET_R * 2.0 * atan2(sqrt(h), sqrt(max(0.0, 1.0 - h)))
+
+func _travel_minutes(k1: int, k2: int) -> int:
+	return int(round(_gc_km(k1, k2) / WALK_KMH * 60.0))
+
+# 当前格的 4 邻接全球格(经度环绕;极点不跨极)→ [[邻格索引, 步行分钟], ...]
+func neighbor_cells(k: int) -> Array:
+	var j: int = k / Sim.NLon; var i: int = k % Sim.NLon
+	var out := []
+	for d in [[0, 1], [0, -1], [1, 0], [-1, 0]]:
+		var nj: int = j + d[0]
+		if nj < 0 or nj >= Sim.NLat: continue
+		var ni: int = (i + d[1] + Sim.NLon) % Sim.NLon
+		var nk: int = nj * Sim.NLon + ni
+		out.append([nk, _travel_minutes(k, nk)])
+	return out
+
+# 邻格的显示名(不真正进入,供 UI 列出去向)
+func peek_cell_name(k: int) -> String:
+	var c: Array = _cell_center(k)
+	var elev_m: float = _elev_m(k)
+	var kind: String = _derive_kind(k, c[0], elev_m)
+	return "%s(%d°,%d°)" % [KIND_CN.get(kind, kind), int(round(c[0])), int(round(c[1]))]
 
 # 土壤水平衡(逐小时):降水补给→蒸发→满溢径流→深渗补地下水→地下水慢基流(旱季泉)
 func _soil_step(L: Dictionary) -> void:
@@ -423,6 +463,7 @@ func cur_loc() -> Dictionary:
 	return locs[player]
 
 func neighbors(k: int) -> Array:
+	if cell_mode: return neighbor_cells(player_k)   # 统一模式:邻接全球格(忽略 k,用 player_k)
 	var out := []
 	for r in routes:
 		if r[0] == k: out.append([r[1], r[2]])
@@ -431,6 +472,12 @@ func neighbors(k: int) -> Array:
 
 func travel_to(k: int) -> bool:
 	if traveling != null: return false
+	if cell_mode:                                    # k=目标全球格索引,须为当前格邻接
+		for nb in neighbor_cells(player_k):
+			if nb[0] == k:
+				traveling = {"to": k, "left": nb[1], "tot": nb[1]}
+				return true
+		return false
 	for nb in neighbors(player):
 		if nb[0] == k:
 			traveling = {"to": k, "left": nb[1], "tot": nb[1]}
@@ -443,7 +490,11 @@ func step(minutes: int) -> void:
 		if traveling != null:
 			traveling["left"] -= 1
 			if traveling["left"] <= 0:
-				player = traveling["to"]; traveling = null
+				if cell_mode:                        # 抵达邻格→在该格重建 locale(化学矿重新切自全局)
+					var ctr: Array = _cell_center(traveling["to"]); traveling = null
+					enter_cell(ctr[0], ctr[1])
+				else:
+					player = traveling["to"]; traveling = null
 		if total % 60 == 0:                          # 每小时:天文 + 刷新边界 + 昼夜瞬时温 + 觅食 + 身体
 			_celestial()
 			_push_boundary()
@@ -454,7 +505,17 @@ func step(minutes: int) -> void:
 			var env: float = cur_loc()["envTemp"]
 			var act: float = 1.4 if traveling != null else 1.0   # 旅途更耗
 			body.step(1, env, act)
-		if total % 1440 == 0:                        # 每天:元素化学 + 河流搬运 + 局部地质(地震/固结)
-			for L in locs: _chem_step(L)
-			_river_step()
-			for L in locs: _geo_local_step(L)
+		if total % 1440 == 0:                        # 每天:化学/河流/地质
+			if cell_mode:
+				_sync_chem_from_global()             # U3:统一模式下化学/矿读全局(单一真相),不跑私有副本
+			else:
+				for L in locs: _chem_step(L)          # 旧 5 地点:私有化学(向后兼容)
+				_river_step()
+				for L in locs: _geo_local_step(L)
+
+# U3:把当前格化学/矿从全局逐元素场重新同步(全局深时间若推进→局部反映;非冻结私有副本)
+func _sync_chem_from_global() -> void:
+	var L = cur_loc()
+	L["dis"] = _slice_e(world.disE, player_k)
+	L["dep"] = _slice_e(world.depE, player_k)
+	L["lithified"] = (world.Lithified[player_k] != 0) if player_k < world.Lithified.size() else L["lithified"]
