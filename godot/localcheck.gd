@@ -80,4 +80,28 @@ func _initialize() -> void:
 		if s < -0.001 or s > float(L["soilCap"]) + 0.001: bounded = false
 	var l2ok: bool = liths.size() >= 4 and elevs.size() >= 4 and hasSpring and bounded
 	print("L2 全态(岩性%d种 · 高程%d档 · 地下水基流泉%s · 土壤水有界%s): %s" % [liths.size(), elevs.size(), str(hasSpring), str(bounded), "✅" if l2ok else "❌"])
-	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok) else 1)
+
+	# ⑦ L3 逐地点元素化学:逐元素守恒 + 岩性成矿签名(花岗岩→U/Th,玄武岩→Ni)
+	var ch = LocalS.new(); ch.setup(w, g)
+	var tot0 := []
+	for e in Sim.NE:
+		var s: float = ch.rockE3[e]
+		for L in ch.locs: s += float(L["dis"][e]) + float(L["dep"][e])
+		tot0.append(s)
+	for d in 120: ch.step(1440)
+	var drift := 0.0
+	for e in Sim.NE:
+		var s: float = ch.rockE3[e]
+		for L in ch.locs: s += float(L["dis"][e]) + float(L["dep"][e])
+		drift = max(drift, abs(s - tot0[e]) / max(1.0, abs(tot0[e])))
+	var mtn = ch.locs[2]["dep"]   # 高山=花岗岩
+	var tun = ch.locs[3]["dep"]   # 苔原=玄武岩
+	var mtnUTh: float = float(mtn[23]) + float(mtn[24])
+	var tunUTh: float = float(tun[23]) + float(tun[24])
+	var mtnNi: float = float(mtn[28])
+	var tunNi: float = float(tun[28])
+	var conserved: bool = drift < 1e-6
+	var signature: bool = mtnUTh > tunUTh and tunNi > mtnNi and mtnUTh > 0.0 and tunNi > 0.0
+	print("L3 元素化学(漂移 %s · 花岗岩U+Th %.2f>%.2f · 玄武岩Ni %.2f>%.2f): 守恒%s 签名%s" % [str(drift), mtnUTh, tunUTh, tunNi, mtnNi, "✅" if conserved else "❌", "✅" if signature else "❌"])
+	var l3ok: bool = conserved and signature
+	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok) else 1)

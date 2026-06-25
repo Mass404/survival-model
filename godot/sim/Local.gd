@@ -19,6 +19,20 @@ var auto_forage := false      # 开则每小时自动觅食(供验证/简单 AI)
 # 天体配置(支持多恒星;默认单日地球态)。flux 相对地球, dayLen 自转周期(分钟), phase 相位
 var SUNS := [{"flux": 1.0, "dayLen": 1440.0, "phase": 0.0}]
 const DIURNAL := {"coast": 4.0, "forest": 9.0, "mountain": 11.0, "tundra": 7.0, "cave": 1.0}  # 昼夜温差幅(海洋/洞穴小)
+# 33元素逐地点化学(全保真:本地岩性 LITHO 驱动风化→溶解→沉淀成矿)。元素名用 Sim.MN
+const ELITHO := {
+	"花岗岩": [0.4, [0.02,0.05,0.02,0.15,0.02,0.01,0.02,0.05,0.40,0.005,0.0,0.02,0.20,0.01,0.005,0.02,0.01,0.0,0.0,0.02,0.0,0.0,0.15,0.15,0.20,0.40,0.05,0.05,0.0,0.0,0.02,0.0,0.0]],
+	"石灰岩": [1.0, [0.03,0.80,0.15,0.02,0.01,0.02,0.10,0.90,0.05,0.005,0.0,0.02,0.0,0.25,0.10,0.0,0.05,0.02,0.02,0.20,0.05,0.0,0.02,0.05,0.02,0.05,0.10,0.0,0.0,0.0,0.05,0.0,0.02]],
+	"玄武岩": [0.8, [0.05,0.30,0.40,0.05,0.35,0.02,0.08,0.15,0.20,0.30,0.0,0.15,0.01,0.02,0.01,0.005,0.30,0.0,0.0,0.15,0.08,0.0,0.03,0.01,0.02,0.20,0.20,0.30,0.25,0.30,0.0,0.20,0.02]],
+	"砂岩": [0.5, [0.05,0.05,0.03,0.03,0.03,0.03,0.03,0.04,0.50,0.01,0.0,0.02,0.0,0.0,0.0,0.005,0.02,0.15,0.02,0.02,0.0,0.0,0.01,0.10,0.02,0.05,0.02,0.10,0.0,0.0,0.05,0.0,0.10]],
+	"蒸发岩": [1.5, [1.50,0.50,0.20,0.10,0.00,1.40,0.80,0.10,0.02,0.0,0.0,0.05,0.0,0.0,0.0,0.0,0.40,0.0,0.30,0.0,0.0,0.40,0.02,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.10,0.0,0.20]],
+	"黏土": [0.7, [0.10,0.20,0.20,0.15,0.10,0.08,0.10,0.20,0.15,0.05,0.0,0.20,0.0,0.03,0.01,0.0,0.05,0.30,0.15,0.10,0.01,0.02,0.02,0.05,0.10,0.40,0.15,0.10,0.10,0.10,0.05,0.10,0.05]],
+}
+const ESOL3 := [8.0,0.4,2.0,3.0,0.05,9.0,1.2,0.6,0.08,0.03,12.0,0.2,0.002,0.004,0.003,0.0005,0.5,0.1,10.0,0.05,0.001,1.5,0.8,0.01,0.0002,0.001,0.3,0.0005,0.05,0.02,0.4,0.05,0.3]
+const WK3 := 0.0006
+const CHEM_SCALE := 1500.0   # world.html 逐分钟率折算到逐日步(数值验证调)
+var rockE3 := PackedFloat64Array()    # 局部层岩石源(NE,守恒)
+var subPoolE3 := PackedFloat64Array() # 俯冲池(供 L7/海洋汇)
 
 func setup(w, g) -> void:
 	world = w
@@ -38,9 +52,35 @@ func _build() -> void:
 	routes = [[0, 1, 600], [1, 2, 400], [1, 4, 120], [1, 3, 1200]]
 	# 下游:高→低(高山→林→海岸),供 L4 河流搬运
 	locs[2]["down"] = 1; locs[1]["down"] = 0; locs[3]["down"] = 1
+	rockE3 = PackedFloat64Array(); rockE3.resize(Sim.NE); rockE3.fill(1.0e6)
+	subPoolE3 = PackedFloat64Array(); subPoolE3.resize(Sim.NE)
+	for L in locs: L["dis"] = _z33(); L["dep"] = _z33()
 	_push_boundary()
 	_update_temps()
 	for L in locs: _soil_step(L)
+
+func _z33() -> Array:
+	var a := []; a.resize(Sim.NE); a.fill(0.0); return a
+
+# 逐地点元素化学(逐日):本地岩性 LITHO 驱动碳酸风化(岩→溶)→溶解度沉淀(溶→沉成矿)。逐元素守恒(rockE3→dis→dep)
+func _chem_step(L: Dictionary) -> void:
+	if L["kind"] == "cave": return
+	var lith = ELITHO[L["lith"]]
+	var rate: float = lith[0]
+	var vec = lith[1]
+	var k: int = _cell(L["lat"], L["lon"])
+	var act: float = rate * clampf(world.P[k], 0.0, 1.5) * clampf((float(L["envTemp"]) + 5.0) / 25.0, 0.0, 1.5) * max(0.1, world.globalCO2 / 2.0)
+	var dis: Array = L["dis"]
+	var dep: Array = L["dep"]
+	var water: float = max(0.1, float(L["Soil"]) / max(0.01, float(L["soilCap"])))
+	for e in Sim.NE:
+		var rel: float = min(WK3 * float(vec[e]) * act * CHEM_SCALE, rockE3[e])
+		rockE3[e] -= rel
+		dis[e] += rel
+		var cap: float = float(ESOL3[e]) * water
+		if dis[e] > cap:
+			var pp: float = (dis[e] - cap) * 0.3
+			dis[e] -= pp; dep[e] += pp
 
 func _mkloc(nm: String, lat: float, lon: float, kind: String, lith: String, elev: float, soilCap: float) -> Dictionary:
 	return {"name": nm, "lat": lat, "lon": lon, "kind": kind, "lith": lith, "elev": elev,
@@ -161,3 +201,5 @@ func step(minutes: int) -> void:
 			var env: float = cur_loc()["envTemp"]
 			var act: float = 1.4 if traveling != null else 1.0   # 旅途更耗
 			body.step(1, env, act)
+		if total % 1440 == 0:                        # 每天:逐地点元素化学(慢过程)
+			for L in locs: _chem_step(L)
