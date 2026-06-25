@@ -60,4 +60,16 @@ func _initialize() -> void:
 	var seaM: float = abs(w.seaOffset * 2000.0)
 	var g4ok: bool = polarSnow > 10.0 and polarSnow > eqSnow + 10.0 and w.iceVol > 0.0 and seaM < 300.0
 	print("G4 雪冰(极区冰%.0f ≫ 赤道%.0f · 总冰量%.0f · 海平面%+.0fm): %s" % [polarSnow, eqSnow, w.iceVol, w.seaOffset * 2000.0, "✅" if g4ok else "❌"])
-	quit(0 if (spatial and gw_ok and ro_ok and river_ok and g4ok) else 1)
+
+	# G5 成矿+固结:砂矿(钛随河富集低地>高地)+ 沉积固结成沉积岩(格子岩性变)
+	var loTi := 0.0; var hiTi := 0.0; var loN := 0; var hiN := 0
+	var lithCount := 0
+	for k in Sim.SZ:
+		if w.Lithified[k] != 0: lithCount += 1
+		if w.Land[k] == 0: continue
+		if w.Elev[k] < w.geo.SEA + 0.05: loTi += w.depE[k * Sim.NE + 27]; loN += 1
+		elif w.Elev[k] > w.geo.SEA + 0.3: hiTi += w.depE[k * Sim.NE + 27]; hiN += 1
+	var loAvg: float = loTi / max(1, loN); var hiAvg: float = hiTi / max(1, hiN)
+	var g5ok: bool = loAvg > hiAvg and lithCount > 0
+	print("G5 成矿固结(砂矿钛 低地%.4f>高地%.4f · 固结成岩%d格): %s" % [loAvg, hiAvg, lithCount, "✅" if g5ok else "❌"])
+	quit(0 if (spatial and gw_ok and ro_ok and river_ok and g4ok and g5ok) else 1)
