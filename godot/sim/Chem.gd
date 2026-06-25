@@ -14,7 +14,65 @@ const AW := {
 	"Ti": 47.867, "Cr": 51.996, "Mn": 54.938, "Fe": 55.845, "Ni": 58.693, "Cu": 63.546,
 	"Zn": 65.38, "Sn": 118.71, "Ag": 107.868, "Au": 196.967, "Pb": 207.2, "Hg": 200.59,
 	"U": 238.029, "Th": 232.038,
+	"I": 126.904, "P": 30.974, "B": 10.81, "F": 18.998, "Mo": 95.95, "Se": 78.971, "Co": 58.933,
 }
+
+# ===== #2 桥:World 的 33 元素槽(World.MN 顺序)↔ 原子组成 =====
+# 多数槽=单元素;含氧阴离子组按真实组成(硫酸盐SO₄/碳酸盐CO₃/硝NO₃/硅以SiO₂计)。
+# 让全局逐格化学(disE/depE/rockE)能按原子记账 + 在格上跑配平反应。顺序必须与 World.MN 严格一致。
+const E2COMP := [
+	{"Na": 1},          # 0 钠
+	{"Ca": 1},          # 1 钙
+	{"Mg": 1},          # 2 镁
+	{"K": 1},           # 3 钾
+	{"Fe": 1},          # 4 铁
+	{"Cl": 1},          # 5 氯
+	{"S": 1, "O": 4},   # 6 硫酸盐 SO₄
+	{"C": 1, "O": 3},   # 7 碳酸盐 CO₃
+	{"Si": 1, "O": 2},  # 8 硅(溶解硅以 SiO₂ 计)
+	{"Cu": 1},          # 9 铜
+	{"I": 1},           # 10 碘
+	{"Zn": 1},          # 11 锌
+	{"Sn": 1},          # 12 锡
+	{"Pb": 1},          # 13 铅
+	{"Ag": 1},          # 14 银
+	{"Au": 1},          # 15 金
+	{"S": 1},           # 16 硫(单质/还原态)
+	{"C": 1},           # 17 碳(有机/还原态)
+	{"N": 1, "O": 3},   # 18 硝 NO₃
+	{"P": 1},           # 19 磷
+	{"Hg": 1},          # 20 汞
+	{"B": 1},           # 21 硼
+	{"F": 1},           # 22 氟
+	{"U": 1},           # 23 铀
+	{"Th": 1},          # 24 钍
+	{"Al": 1},          # 25 铝
+	{"Mn": 1},          # 26 锰
+	{"Ti": 1},          # 27 钛
+	{"Ni": 1},          # 28 镍
+	{"Cr": 1},          # 29 铬
+	{"Mo": 1},          # 30 钼
+	{"Co": 1},          # 31 钴
+	{"Se": 1},          # 32 硒
+]
+
+# 第 i 个元素槽的式量 g/mol(按其原子组成)
+static func slot_molar_mass(i: int) -> float:
+	var m := 0.0
+	var comp = E2COMP[i]
+	for el in comp: m += float(AW[el]) * float(comp[el])
+	return m
+
+# 把一份 33 元素槽量向量(摩尔)按原子组成累加成基础元素原子总数 {元素:原子数};供守恒记账/反应桥
+static func slots_to_atoms(vec: Array) -> Dictionary:
+	var atoms := {}
+	for i in E2COMP.size():
+		if i >= vec.size(): break
+		var amt: float = float(vec[i])
+		if amt == 0.0: continue
+		var comp = E2COMP[i]
+		for el in comp: atoms[el] = float(atoms.get(el, 0.0)) + amt * float(comp[el])
+	return atoms
 
 # 物种表:comp=原子组成 · phase=相(s固/l液/g气) · mp=熔点K · rho=密度g/cm³ · name=中文
 const SP := {
