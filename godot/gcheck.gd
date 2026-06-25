@@ -48,4 +48,16 @@ func _initialize() -> void:
 	lowLoad /= third; highLoad /= third
 	var river_ok: bool = lowLoad > highLoad * 1.2
 	print("G3 河网(下游低地溶解载量 %.1f > 源头高地 %.1f): %s" % [lowLoad, highLoad, "✅" if river_ok else "❌"])
-	quit(0 if (spatial and gw_ok and ro_ok and river_ok) else 1)
+
+	# G4 逐格雪/冰川:极区/高山积雪成冰(赤道无),真冰量驱动海平面
+	var polarSnow := 0.0; var eqSnow := 0.0
+	for j in Sim.NLat:
+		var lat: float = abs(w.latof(j))
+		for i in Sim.NLon:
+			var s: float = w.Snow[j * Sim.NLon + i] + w.Glacier[j * Sim.NLon + i]
+			if lat > 55.0: polarSnow += s
+			elif lat < 30.0: eqSnow += s
+	var seaM: float = abs(w.seaOffset * 2000.0)
+	var g4ok: bool = polarSnow > 10.0 and polarSnow > eqSnow + 10.0 and w.iceVol > 0.0 and seaM < 300.0
+	print("G4 雪冰(极区冰%.0f ≫ 赤道%.0f · 总冰量%.0f · 海平面%+.0fm): %s" % [polarSnow, eqSnow, w.iceVol, w.seaOffset * 2000.0, "✅" if g4ok else "❌"])
+	quit(0 if (spatial and gw_ok and ro_ok and river_ok and g4ok) else 1)
