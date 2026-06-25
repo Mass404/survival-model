@@ -18,6 +18,11 @@ var total := 0                # 分钟计数
 var auto_forage := false      # 开则每小时自动觅食(供验证/简单 AI)
 # 天体配置(支持多恒星;默认单日地球态)。flux 相对地球, dayLen 自转周期(分钟), phase 相位
 var SUNS := [{"flux": 1.0, "dayLen": 1440.0, "phase": 0.0}]
+var MOONS := [{"period": 27.3, "amp": 0.4, "bright": 0.25}]   # 卫星:周期(天)/潮汐振幅/夜光亮度(支持多卫星)
+const SOLAR_TIDE := 0.18   # 太阳半日潮振幅
+const MAG_SHIELD := 0.9    # 磁层屏蔽强度
+var tide := 0.0            # 当前潮位(全局)
+var moonIllum := 0.0       # 当前月相照度 0新月..1满月(全局)
 const DIURNAL := {"coast": 4.0, "forest": 9.0, "mountain": 11.0, "tundra": 7.0, "cave": 1.0}  # 昼夜温差幅(海洋/洞穴小)
 # 33元素逐地点化学(全保真:本地岩性 LITHO 驱动风化→溶解→沉淀成矿)。元素名用 Sim.MN
 const ELITHO := {
@@ -88,6 +93,23 @@ func _weather_step(L: Dictionary) -> void:
 		L["charge"] = 0.0
 		L["lightning"] = int(L["lightning"]) + 1
 
+# 天文(逐小时全局):潮汐(日月半日潮)+ 月相照度。移植 world.html tideLevel/moonLight
+func _celestial() -> void:
+	var modm := float(total % 1440)
+	var hs := 2.0 * PI * (modm / 1440.0) - PI
+	var s := SOLAR_TIDE * cos(2.0 * hs)
+	for mo in MOONS:
+		var f := fmod(float(total) / 1440.0 / float(mo["period"]), 1.0)
+		s += float(mo["amp"]) * cos(2.0 * (hs - 2.0 * PI * f))
+	tide = s
+	var fp := fmod(float(total) / 1440.0 / float(MOONS[0]["period"]), 1.0)
+	moonIllum = (1.0 - cos(2.0 * PI * fp)) / 2.0     # 月相:0新月..1满月
+
+# 辐射剂量(per loc):磁层屏蔽赤道强、两极弱(磁漏斗)→极区高;高海拔薄气→更高
+func _radiation(lat: float, elev: float) -> float:
+	var shield: float = MAG_SHIELD * (1.0 - 0.6 * abs(sin(lat * PI / 180.0)))
+	return max(0.02, 1.0 - shield) * (1.0 + elev / 8000.0)
+
 # 逐地点元素化学(逐日):本地岩性 LITHO 驱动碳酸风化(岩→溶)→溶解度沉淀(溶→沉成矿)。逐元素守恒(rockE3→dis→dep)
 func _chem_step(L: Dictionary) -> void:
 	if L["kind"] == "cave": return
@@ -126,7 +148,7 @@ func _mkloc(nm: String, lat: float, lon: float, kind: String, lith: String, elev
 	return {"name": nm, "lat": lat, "lon": lon, "kind": kind, "lith": lith, "elev": elev,
 		"soilCap": soilCap, "Soil": soilCap * 0.5, "Lake": 0.0, "GW": 2.0,
 		"runoff": 0.0, "runoffAcc": 0.0, "spring": 0.0, "down": -1, "envTemp": 15.0, "meanTemp": 15.0,
-		"snow": 0.0, "glacier": 0.0, "charge": 0.0, "lightning": 0, "wind": 0.0, "wave": 0.0,
+		"snow": 0.0, "glacier": 0.0, "charge": 0.0, "lightning": 0, "wind": 0.0, "wave": 0.0, "radiation": 0.0,
 		"food": 0.0, "water": 0.0, "foodCap": 0.0, "waterCap": 0.0}
 
 # 土壤水平衡(逐小时):降水补给→蒸发→满溢径流→深渗补地下水→地下水慢基流(旱季泉)
@@ -196,8 +218,9 @@ func _push_boundary() -> void:
 		L["meanTemp"] = _mean_temp(L)
 		# 资源:食物=当地植被(全球 N 生物量) + 海岸海产;水=降水(淡水)。按容量再生
 		var k: int = _cell(L["lat"], L["lon"])
+		L["radiation"] = _radiation(float(L["lat"]), float(L["elev"]))   # 辐射剂量(磁层+海拔)
 		var veg: float = world.N[k] + world.H[k] * 0.5     # 生产者+食草(可猎)
-		if L["kind"] == "coast": veg += 8.0                # 海产
+		if L["kind"] == "coast": veg += 8.0 + max(0.0, -tide) * 10.0    # 海产 + 低潮露滩→更多觅食
 		L["foodCap"] = veg * 60.0                          # kcal 容量
 		L["food"] = min(float(L["food"]) + L["foodCap"] * 0.04, L["foodCap"])  # 水由 _soil_step 算
 
@@ -235,7 +258,8 @@ func step(minutes: int) -> void:
 			traveling["left"] -= 1
 			if traveling["left"] <= 0:
 				player = traveling["to"]; traveling = null
-		if total % 60 == 0:                          # 每小时:刷新边界(日均)+ 昼夜瞬时温 + 觅食 + 身体
+		if total % 60 == 0:                          # 每小时:天文 + 刷新边界 + 昼夜瞬时温 + 觅食 + 身体
+			_celestial()
 			_push_boundary()
 			_update_temps()
 			for L in locs: _soil_step(L)              # 土壤水/地下水平衡

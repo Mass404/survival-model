@@ -121,4 +121,19 @@ func _initialize() -> void:
 	var warmLight: int = int(wx.locs[1]["lightning"]) + int(wx.locs[0]["lightning"])
 	var l5ok: bool = coldSnow > 0.5 and coldSnow > snowCoast + 0.5 and warmLight > 0
 	print("L5 水文气象(雪 山%.1f/苔%.1f/岸%.1f · 暖湿闪电%d次): %s" % [snowMtn, snowTun, snowCoast, warmLight, "✅" if l5ok else "❌"])
-	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok) else 1)
+
+	# ⑩ L6 天文:潮汐(日内摆动)+ 月相(新月→满月)+ 辐射(极区>赤道,磁层漏斗)
+	var ast = LocalS.new(); ast.setup(w, g)
+	var tMin := 9.0; var tMax := -9.0
+	for h in 24:
+		ast.step(60)
+		tMin = min(tMin, ast.tide); tMax = max(tMax, ast.tide)
+	var mMin := 9.0; var mMax := -9.0
+	for d in 28:
+		ast.step(1440)
+		mMin = min(mMin, ast.moonIllum); mMax = max(mMax, ast.moonIllum)
+	var radPolar: float = ast.locs[3]["radiation"]
+	var radEq: float = ast.locs[0]["radiation"]
+	var l6ok: bool = (tMax - tMin) > 0.1 and (mMax - mMin) > 0.5 and radPolar > radEq
+	print("L6 天文(潮差%.2f · 月相%.2f→%.2f · 辐射极%.2f>赤%.2f): %s" % [tMax - tMin, mMin, mMax, radPolar, radEq, "✅" if l6ok else "❌"])
+	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok and l6ok) else 1)
