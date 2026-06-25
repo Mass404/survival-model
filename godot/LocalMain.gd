@@ -137,8 +137,10 @@ func refresh() -> void:
 	_setbar("core", b.coreT, 42.0, "%.1f℃" % b.coreT, Color8(220, 90, 90) if (b.coreT < 35.0 or b.coreT > 38.5) else Color8(90, 200, 120))
 	var naC: float = b.naBody / max(1.0, b.waterMl / 1000.0)
 	_setbar("na", naC, 160.0, "%.0f mmol/L" % naC, Color8(160, 120, 220))
-	env_label.text = "🍖 食物 %.0f kcal   💧 水 %.0f mL   🌡 体感 %.1f℃\n❄ 雪 %.1f   🌊 潮位 %+.2f   ☢ 辐射 %.2f   💨 风 %.1f   ⚡闪电 %d" % [
-		float(L["food"]), float(L["water"]), b.coreT, float(L["snow"]), local.tide, float(L["radiation"]), float(L["wind"]), int(L["lightning"])]
+	var feels: float = local.feels_like(float(L["envTemp"]), float(L["wind"]))   # 风寒体感气温
+	var aur := "   🌌极光" if local.aurora_now() > 0.05 else ""
+	env_label.text = "🍖 食物 %.0f kcal   💧 水 %.0f mL   🌡 体感 %.1f℃\n❄ 雪 %.1f   🌊 潮位 %+.2f   ☢ 辐射 %.2f   💨 风 %.1f   ⚡闪电 %d%s" % [
+		float(L["food"]), float(L["water"]), feels, float(L["snow"]), local.tide, float(L["radiation"]), float(L["wind"]), int(L["lightning"]), aur]
 	# 旅行按钮
 	for c in travel_box.get_children(): c.queue_free()
 	for nb in local.neighbors(local.player):

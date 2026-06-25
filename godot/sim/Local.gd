@@ -72,7 +72,6 @@ func _ring_shadow(latRad: float, deRad: float) -> float:
 func _ring_shine(latRad: float, deRad: float) -> float:   # 环反射夜光 ∝ 环被照亮程度
 	if RING == null: return 0.0
 	return float(RING["glow"]) * abs(sin(deRad)) * (1.0 if latRad * deRad > 0.0 else 0.4)
-const MAG_SHIELD := 0.9    # 磁层屏蔽强度
 var tide := 0.0            # 当前潮位(全局)
 var moonIllum := 0.0       # 当前月相照度 0新月..1满月(全局)
 const DIURNAL := {"coast": 4.0, "forest": 9.0, "mountain": 11.0, "tundra": 7.0, "cave": 1.0}  # 昼夜温差幅(海洋/洞穴小)
@@ -165,10 +164,34 @@ func _celestial() -> void:
 	ringShineNow = _ring_shine(float(cur_loc()["lat"]) * PI / 180.0, world.decl(doy) * PI / 180.0)   # 环光夜照
 	eclSolar = _eclipse_cover(false); eclLunar = _eclipse_cover(true)   # 日/月食遮挡
 
-# 辐射剂量(per loc):磁层屏蔽赤道强、两极弱(磁漏斗)→极区高;高海拔薄气→更高
-func _radiation(lat: float, elev: float) -> float:
-	var shield: float = MAG_SHIELD * (1.0 - 0.6 * abs(sin(lat * PI / 180.0)))
-	return max(0.02, 1.0 - shield) * (1.0 + elev / 8000.0)
+# 辐射剂量(per loc,从 world.html radiationAt):
+#   宇宙/太阳 = (1-磁屏蔽)×薄气放大;磁屏蔽赤道强两极弱(磁漏斗)→极区高;磁场动态∝核活动×自转
+#   + 地质本底 = U/Th 岩石(溶+沉) + 氡气(洞穴积聚)
+func _radiation(L: Dictionary) -> float:
+	var lat: float = float(L["lat"])
+	var shield: float = world.mag_shield() * (1.0 - 0.6 * abs(sin(lat * PI / 180.0)))
+	var cosmic: float = max(0.02, 1.0 - shield) * (1.0 + float(L["elev"]) / 8000.0)   # 薄气(高海拔)→更高
+	var dis: Array = L["dis"]; var dep: Array = L["dep"]
+	var uth: float = float(dis[23]) + float(dis[24]) + float(dep[23]) + float(dep[24])   # U+Th 岩石本底
+	var geo: float = 0.2 * uth + 1.5 * float(L.get("radon", 0.0))
+	return cosmic + geo
+
+# 风寒体感(从 world.html feelsLike):风越大、气温越低→体感越冷(33℃以上无风寒)
+const WCHILL_K := 2.5
+func feels_like(t: float, w: float) -> float:
+	return t - WCHILL_K * sqrt(max(0.0, w)) * max(0.0, 33.0 - t) / 33.0
+
+# 极光强度(从 world.html auroraStrength):高磁纬(>50°)+有磁场channel带电粒子→极光帘幕
+func aurora_strength(lat: float) -> float:
+	return max(0.0, (abs(lat) - 50.0) / 40.0) * min(1.0, world.mag_field() / Sim.MAG_BCRIT)
+
+# 当前地点此刻可见极光?需高磁纬 + 够暗(夜)。返回强度(0=不可见)
+func aurora_now() -> float:
+	var L = cur_loc()
+	var au: float = aurora_strength(float(L["lat"]))
+	if au <= 0.05: return 0.0
+	var doy: int = int(float(total) / 1440.0) % Sim.YEAR
+	return au if _sun_flux(float(L["lat"]), doy) < 0.05 else 0.0   # 够暗才看得见
 
 # 逐地点元素化学(逐日):本地岩性 LITHO 驱动碳酸风化(岩→溶)→溶解度沉淀(溶→沉成矿)。逐元素守恒(rockE3→dis→dep)
 func _chem_step(L: Dictionary) -> void:
@@ -241,6 +264,7 @@ func _mkloc(nm: String, lat: float, lon: float, kind: String, lith: String, elev
 		"soilCap": soilCap, "Soil": soilCap * 0.5, "Lake": 0.0, "GW": 2.0,
 		"runoff": 0.0, "runoffAcc": 0.0, "spring": 0.0, "down": -1, "envTemp": 15.0, "meanTemp": 15.0,
 		"snow": 0.0, "glacier": 0.0, "charge": 0.0, "lightning": 0, "wind": 0.0, "wave": 0.0, "radiation": 0.0,
+		"vent": (0.0004 if kind == "cave" else 0.3), "radon": 0.0,   # 通风率(洞穴极低→气体积聚)+ 氡浓度
 		"tecStress": 0.0, "quakes": 0, "lithified": false,
 		"food": 0.0, "water": 0.0, "foodCap": 0.0, "waterCap": 0.0}
 
@@ -311,7 +335,12 @@ func _push_boundary() -> void:
 		L["meanTemp"] = _mean_temp(L)
 		# 资源:食物=当地植被(全球 N 生物量) + 海岸海产;水=降水(淡水)。按容量再生
 		var k: int = _cell(L["lat"], L["lon"])
-		L["radiation"] = _radiation(float(L["lat"]), float(L["elev"]))   # 辐射剂量(磁层+海拔)
+		# 氡:U衰变产气,低通风(洞穴)积聚,自身快衰变(从 world.html);平衡=0.0005·U/(0.02+vent)
+		var dis: Array = L["dis"]; var dep: Array = L["dep"]
+		var uHere: float = float(dis[23]) + float(dep[23])
+		var rn: float = float(L["radon"])
+		L["radon"] = max(0.0, rn + 0.0005 * uHere - rn * (0.02 + float(L["vent"])))
+		L["radiation"] = _radiation(L)   # 辐射剂量(动态磁层屏蔽 + U/Th本底 + 氡)
 		var veg: float = world.N[k] + world.H[k] * 0.5     # 生产者+食草(可猎)
 		if L["kind"] == "coast": veg += 8.0 + max(0.0, -tide) * 10.0    # 海产 + 低潮露滩→更多觅食
 		L["foodCap"] = veg * 90.0                          # kcal 容量

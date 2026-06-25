@@ -259,6 +259,25 @@ const WK := 0.0006        # 风化基率
 # R4 行星配置:金属丰度(星系化学演化代;地球=1,贫金属第一代→0)。重元素丰度∝金属丰度
 var metallicity := 1.0
 const HEAVY_E := [9, 12, 13, 14, 15, 20, 23, 24]   # 超新星产重元素:铜锡铅银金汞铀钍(贫金属星无矿无核燃料)
+
+# R5 行星磁层(从 world.html magField/magShield):地磁发电机 B ∝ 核活动(放射成因热)×自转。
+# 与火山同根(放射性燃料 U/Th/K ∝ 金属丰度^1.3,超新星产物)。耦合:大气屏蔽率→地表辐射、极光。
+const MAG_BSURF := 50.0       # 参考地表场 μT(地球态)
+const MAG_BCRIT := 20.0       # 屏蔽住太阳风/锁住辐射所需场 μT
+var planet_radio := 1.0       # 放射性燃料基准(U/Th/K),地球=1;贫金属第一代→几乎无→冷核
+var planet_rot_h := 24.0      # 自转周期(小时),越快磁场越强
+var planet_radius_km := 6371.0   # 行星半径 km(小行星散热快→核活动低)
+
+func core_activity() -> float:   # 核对流活动 = 放射成因热/散热(∝1/R):地球≈1稳定;小星/贫铀→偏低
+	var radio_fuel: float = planet_radio * pow(metallicity, 1.3)   # 重元素(SN产)对代数更敏感
+	return min(1.0, radio_fuel / (6371.0 / planet_radius_km))
+
+func mag_field() -> float:       # 地表磁场强度 μT
+	return MAG_BSURF * core_activity() * (24.0 / planet_rot_h)
+
+func mag_shield() -> float:      # 大气/磁层屏蔽率(强场→1=不漏)
+	return min(1.0, mag_field() / MAG_BCRIT)
+
 const E_BURY := 5e-4      # 海洋埋藏率(对超本底)
 const E_RETURN := 0.03    # 俯冲池→火山返还(每地质年)
 var disE := PackedFloat64Array()    # 各格溶解元素,索引 k*NE+e
