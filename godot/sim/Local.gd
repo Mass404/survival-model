@@ -268,6 +268,69 @@ func _mkloc(nm: String, lat: float, lon: float, kind: String, lith: String, elev
 		"tecStress": 0.0, "quakes": 0, "lithified": false,
 		"food": 0.0, "water": 0.0, "foodCap": 0.0, "waterCap": 0.0}
 
+# ============ 两层统一:在全球任意格实例化生存 locale(读全局格的岩性/高程/海陆/化学矿) ============
+const ELEV_M := 8000.0   # geo 高程单位(SEA 之上)→米的换算(relief 0.4→3200m,标定到几千米级山)
+const SOILCAP_BY_KIND := {"coast": 0.8, "forest": 1.6, "mountain": 0.4, "tundra": 0.6}
+const KIND_CN := {"coast": "海岸", "forest": "陆地", "mountain": "高山", "tundra": "苔原"}
+
+# 全球格 → 米制高程(海格=海平面 0)
+func _elev_m(k: int) -> float:
+	return max(0.0, float(world.Elev[k]) - geo.SEA) * ELEV_M
+
+# 跨海陆界 = 海岸(land 格临海 或 海格临陆)
+func _is_coast(k: int) -> bool:
+	var j: int = k / Sim.NLon; var i: int = k % Sim.NLon
+	for d in [[0, 1], [0, -1], [1, 0], [-1, 0]]:
+		var nj: int = clampi(j + d[0], 0, Sim.NLat - 1)
+		var ni: int = (i + d[1] + Sim.NLon) % Sim.NLon
+		if world.Land[nj * Sim.NLon + ni] != world.Land[k]: return true
+	return false
+
+# 从全球格属性派生地形类型(海=海岸/海洋;陆按 临海/高程/纬度)
+func _derive_kind(k: int, lat: float, elev_m: float) -> String:
+	if world.Land[k] == 0: return "coast"            # 海格:海岸/海洋(取水=海、有海产)
+	if _is_coast(k): return "coast"
+	if elev_m > 2000.0: return "mountain"
+	if absf(lat) > 60.0: return "tundra"
+	return "forest"
+
+# 从全局逐元素场切出某格的 33 元素数组(拷贝:进入时取全局现态做基线,生存期局部演化不污染深时间全局)
+func _slice_e(src: PackedFloat64Array, k: int) -> Array:
+	var a := []; a.resize(Sim.NE)
+	var base: int = k * Sim.NE
+	for e in Sim.NE: a[e] = (float(src[base + e]) if base + e < src.size() else 0.0)
+	return a
+
+# 据(纬,经)从全球格生成一个可求生 locale:岩性/高程/地形/化学矿产全部来自该全局格(单一真相)
+func _locale_from_cell(lat: float, lon: float) -> Dictionary:
+	var k: int = _cell(lat, lon)
+	var elev_m: float = _elev_m(k)
+	var kind: String = _derive_kind(k, lat, elev_m)
+	var li: int = world.Lith[k] if k < world.Lith.size() else 2
+	var lith: String = Sim.LITH_NAMES[li]
+	var scap: float = SOILCAP_BY_KIND.get(kind, 1.0)
+	var nm: String = "%s(%d°,%d°)" % [KIND_CN.get(kind, kind), int(round(lat)), int(round(lon))]
+	var L: Dictionary = _mkloc(nm, lat, lon, kind, lith, elev_m, scap)
+	# 矿产/化学取自全局格(G1-G5 的逐格成矿成果);雪冰承袭全局(冰期)。土壤水/地下水用默认再本地演化
+	L["dis"] = _slice_e(world.disE, k)
+	L["dep"] = _slice_e(world.depE, k)
+	L["snow"] = float(world.Snow[k]) if k < world.Snow.size() else 0.0
+	L["glacier"] = float(world.Glacier[k]) if k < world.Glacier.size() else 0.0
+	L["lithified"] = (world.Lithified[k] != 0) if k < world.Lithified.size() else false
+	L["vent"] = (float(world.Vent[k]) if k < world.Vent.size() and float(world.Vent[k]) > 0.0 else (0.0004 if kind == "cave" else 0.3))
+	return L
+
+# 进入全球任意格求生:把该格生成的 locale 设为当前唯一地点(玩家空降)。返回 player 索引(=0)
+func enter_cell(lat: float, lon: float) -> int:
+	var L: Dictionary = _locale_from_cell(lat, lon)
+	locs = [L]
+	routes = []
+	player = 0
+	rockE3 = PackedFloat64Array(); rockE3.resize(Sim.NE); rockE3.fill(1.0e6)
+	subPoolE3 = PackedFloat64Array(); subPoolE3.resize(Sim.NE)
+	_push_boundary(); _update_temps(); _soil_step(L)
+	return player
+
 # 土壤水平衡(逐小时):降水补给→蒸发→满溢径流→深渗补地下水→地下水慢基流(旱季泉)
 func _soil_step(L: Dictionary) -> void:
 	if L["kind"] == "cave":
