@@ -231,6 +231,11 @@ const LITH_VEC := [
 	[0.10,0.20,0.20,0.15,0.10,0.08,0.10,0.20,0.15,0.05,0.0,0.20,0.0,0.03,0.01,0.0,0.05,0.30,0.15,0.10,0.01,0.02,0.02,0.05,0.10,0.40,0.15,0.10,0.10,0.10,0.05,0.10,0.05],
 ]
 var Lith := PackedByteArray()    # 每格岩性索引
+# G2 逐格土壤水/地下水
+const SOIL_CAP := 2.0
+var Soil := PackedFloat64Array()     # 土壤含水
+var GW := PackedFloat64Array()       # 地下水
+var Runoff := PackedFloat64Array()   # 累积径流(供 G3 河网路由)
 const WK := 0.0006        # 风化基率
 const E_BURY := 5e-4      # 海洋埋藏率(对超本底)
 const E_RETURN := 0.03    # 俯冲池→火山返还(每地质年)
@@ -456,8 +461,25 @@ func envDry(j: int, i: int) -> float:
 	var k := j * NLon + i
 	return (1.0 - P[k]) if Land[k] != 0 else 0.0
 
+func soilStep(dt: float) -> void:   # G2 逐格土壤水平衡:降水→蒸发→满溢径流→深渗地下水→基流。供 G3 河网
+	var ds := dt / 10.0
+	for k in SZ:
+		if Land[k] == 0: continue
+		var evap: float = clampf(T[k] * 0.02 + 0.1, 0.05, 1.5)
+		Soil[k] = Soil[k] + (P[k] * 0.6 - evap) * ds - 0.08 * Soil[k] * ds
+		var ro: float = 0.08 * Soil[k] * ds
+		if Soil[k] > SOIL_CAP: ro += Soil[k] - SOIL_CAP; Soil[k] = SOIL_CAP
+		if Soil[k] < 0.0: Soil[k] = 0.0
+		if Soil[k] > 0.7 * SOIL_CAP:
+			var deep: float = 0.05 * (Soil[k] - 0.7 * SOIL_CAP) * ds
+			Soil[k] -= deep; GW[k] += deep
+		var base: float = 0.02 * GW[k] * ds
+		GW[k] -= base
+		Runoff[k] += ro + base
+
 func stepLife(dt: float) -> void:
 	updateHab()
+	soilStep(dt)
 	var aT := 1.0 - exp(-0.05 * dt)
 	var aS := 1.0 - exp(-0.04 * dt)
 	var aD := 1.0 - exp(-0.05 * dt)
@@ -911,6 +933,7 @@ func spinUp() -> void:
 	depE = PackedFloat64Array(); depE.resize(SZ * NE)
 	subPoolE = PackedFloat64Array(); subPoolE.resize(NE)
 	rockE = PackedFloat64Array(); rockE.resize(NE); rockE.fill(100000.0)
+	Soil = gridF(SOIL_CAP * 0.5); GW = gridF(2.0); Runoff = gridF(0.0)
 	for k in SZ:
 		if Land[k] == 0:
 			for e in NE: disE[k * NE + e] = float(SEAREF[e])

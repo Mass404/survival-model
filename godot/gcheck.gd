@@ -1,0 +1,34 @@
+extends SceneTree
+# 全球深化(G系列)headless 验证:godot --headless --path godot --script res://gcheck.gd
+# G2 逐格土壤水/地下水:土壤湿度随气候空间分异 + 地下水积累 + 径流(供河网)。
+const Sim = preload("res://sim/World.gd")
+const GeoS = preload("res://sim/Geo.gd")
+
+func _initialize() -> void:
+	var g = GeoS.new(); g.generate()
+	var w = Sim.new(); w.geo = g
+	w.land_mask = g.coarse_land(Sim.NLat, Sim.NLon)
+	w.spinUp()
+	var day := 0
+	for step in 40 * Sim.YEAR:
+		w.stepDay(day % Sim.YEAR)
+		if day % 10 == 0: w.stepLife(10.0)
+		if day % Sim.YEAR == 0: w.stepGeo()
+		day += 1
+	var sMin := 9.0; var sMax := -9.0
+	var gwMax := 0.0; var roCells := 0; var landN := 0
+	for k in Sim.SZ:
+		if w.Land[k] == 0: continue
+		landN += 1
+		sMin = min(sMin, w.Soil[k]); sMax = max(sMax, w.Soil[k])
+		gwMax = max(gwMax, w.GW[k])
+		if w.Runoff[k] > 0.0: roCells += 1
+	print("================ G2 全球土壤水文验证 ================")
+	print("陆格 %d · 土壤湿度 %.2f~%.2f(跨度 %.2f) · 地下水峰 %.1f · 有径流格 %d" % [landN, sMin, sMax, sMax - sMin, gwMax, roCells])
+	var spatial: bool = (sMax - sMin) > 0.3
+	var gw_ok: bool = gwMax > 0.5    # 地下水作为旱季储备持续存在(像缓冲,不一定增长)
+	var ro_ok: bool = roCells > landN / 3
+	print("土壤湿度气候分异: %s" % ("✅" if spatial else "❌"))
+	print("地下水积累: %s" % ("✅" if gw_ok else "❌"))
+	print("径流(供河网): %s" % ("✅" if ro_ok else "❌"))
+	quit(0 if (spatial and gw_ok and ro_ok) else 1)
