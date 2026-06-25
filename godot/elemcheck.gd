@@ -45,7 +45,17 @@ func _initialize() -> void:
 	var active: bool = depSum > 1.0 and landDis > 1.0
 	print("逐元素守恒: %s" % ("✅ 一克不差" if conserved else "❌ 漂了"))
 	print("风化/沉积活跃: %s" % ("✅" if active else "❌"))
-	quit(0 if (conserved and active) else 1)
+	# G1 逐格岩性异质:岩性多样 + 陆地铀沉积(花岗岩富)在格间分异
+	var lithSet := {}
+	var uMax := 0.0; var uMin := 1e9
+	for k in Sim.SZ:
+		lithSet[w.Lith[k]] = true
+		if w.Land[k] != 0:
+			var u: float = w.depE[k * Sim.NE + 23]
+			uMax = max(uMax, u); uMin = min(uMin, u)
+	var hetero: bool = lithSet.size() >= 3 and uMax > uMin + 0.3
+	print("G1 逐格岩性异质(岩性%d种 · 陆U沉积 %.2f~%.2f): %s" % [lithSet.size(), uMin, uMax, "✅" if hetero else "❌"])
+	quit(0 if (conserved and active and hetero) else 1)
 
 func _seaAvg(w, e: int) -> float:
 	var s := 0.0; var n := 0
