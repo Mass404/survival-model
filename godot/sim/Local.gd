@@ -20,6 +20,31 @@ var auto_forage := false      # 开则每小时自动觅食(供验证/简单 AI)
 var SUNS := [{"flux": 1.0, "dayLen": 1440.0, "phase": 0.0}]
 var MOONS := [{"period": 27.3, "amp": 0.4, "bright": 0.25}]   # 卫星:周期(天)/潮汐振幅/夜光亮度(支持多卫星)
 const SOLAR_TIDE := 0.18   # 太阳半日潮振幅
+var RING = null            # 行星环(默认无):{inner,outer,opacity,glow},内外半径(行星半径计)/不透明度/反照
+var ringShineNow := 0.0    # 当前环光夜照(全局)
+
+# 移植 world.html ringShadow:该纬度当日日照被环影削减比例(几何积分,确定性)
+func _ring_shadow(latRad: float, deRad: float) -> float:
+	if RING == null: return 0.0
+	var sz := sin(deRad)
+	if abs(sz) < 1e-3: return 0.0
+	var sx := cos(deRad)
+	var lit := 0.0; var blk := 0.0
+	for k in 24:
+		var lam := (k + 0.5) / 24.0 * 2.0 * PI
+		var px := cos(latRad) * cos(lam); var py := cos(latRad) * sin(lam); var pz := sin(latRad)
+		var mu := px * sx + pz * sz
+		if mu <= 0.0: continue
+		lit += mu
+		var t := -pz / sz
+		if t <= 0.0: continue
+		var rho := sqrt((px + t * sx) * (px + t * sx) + py * py)
+		if rho >= float(RING["inner"]) and rho <= float(RING["outer"]): blk += mu * float(RING["opacity"])
+	return (blk / lit) if lit > 0.0 else 0.0
+
+func _ring_shine(latRad: float, deRad: float) -> float:   # 环反射夜光 ∝ 环被照亮程度
+	if RING == null: return 0.0
+	return float(RING["glow"]) * abs(sin(deRad)) * (1.0 if latRad * deRad > 0.0 else 0.4)
 const MAG_SHIELD := 0.9    # 磁层屏蔽强度
 var tide := 0.0            # 当前潮位(全局)
 var moonIllum := 0.0       # 当前月相照度 0新月..1满月(全局)
@@ -109,6 +134,8 @@ func _celestial() -> void:
 	tide = s
 	var fp := fmod(float(total) / 1440.0 / float(MOONS[0]["period"]), 1.0)
 	moonIllum = (1.0 - cos(2.0 * PI * fp)) / 2.0     # 月相:0新月..1满月
+	var doy: int = int(float(total) / 1440.0) % Sim.YEAR
+	ringShineNow = _ring_shine(float(cur_loc()["lat"]) * PI / 180.0, world.decl(doy) * PI / 180.0)   # 环光夜照
 
 # 辐射剂量(per loc):磁层屏蔽赤道强、两极弱(磁漏斗)→极区高;高海拔薄气→更高
 func _radiation(lat: float, elev: float) -> float:
@@ -238,7 +265,7 @@ func _sun_flux(lat: float, doy: int) -> float:
 		var hangle := 2.0 * PI * frac - PI
 		var e := sin(phi) * sin(de) + cos(phi) * cos(de) * cos(hangle)
 		if e > 0.0: s += float(su["flux"]) * e
-	return s
+	return s * (1.0 - _ring_shadow(phi, de))   # 环影削日照
 
 # 瞬时温 = 日均(全球喂)+ 昼夜摆动(太阳几何驱动:正午暖/夜里冷)
 func _inst_temp(L: Dictionary) -> float:
