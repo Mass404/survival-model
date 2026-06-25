@@ -25,7 +25,8 @@ func _ready() -> void:
 	world.spinUp()
 	for d in 180: world.stepDay(d % Sim.YEAR)     # 推到温暖季,出生点宜居
 	local = LocalS.new(); local.setup(world, geo)
-	local.player = 0                               # 从赤道海岸起步
+	var sp: Array = local.find_spawn()             # 两层统一:空降全球宜居格(取代写死地点)
+	local.enter_cell(sp[0], sp[1])
 	_build_ui()
 	_log_add("你在 %s 醒来。" % local.cur_loc()["name"])
 	refresh()
@@ -110,8 +111,10 @@ func _do_drink() -> void:
 	local.forage(1); _advance(60)            # forage 已含喝水(到解渴)
 func _do_night() -> void:
 	local.auto_forage = true; _advance(480); local.auto_forage = false   # 睡 8 小时
+func _nb_name(k: int) -> String:                   # 邻格显示名(cell_mode:全球格;否则:locs 索引)
+	return local.peek_cell_name(k) if local.cell_mode else String(local.locs[k]["name"])
 func _do_travel(k: int) -> void:
-	var nm: String = local.locs[k]["name"]
+	var nm: String = _nb_name(k)
 	if local.travel_to(k):
 		var mins: int = int(local.traveling["tot"]) + 1
 		local.auto_forage = true; _advance(mins); local.auto_forage = false
@@ -145,7 +148,7 @@ func refresh() -> void:
 	for c in travel_box.get_children(): c.queue_free()
 	for nb in local.neighbors(local.player):
 		var k: int = nb[0]; var hrs: float = float(nb[1]) / 60.0
-		travel_box.add_child(_btn("→ %s (%.0fh)" % [local.locs[k]["name"], hrs], _do_travel.bind(k)))
+		travel_box.add_child(_btn("→ %s (%.0fh)" % [_nb_name(k), hrs], _do_travel.bind(k)))
 	if b.dead:
 		status_label.text = "⚰ 已死亡:%s（存活 %d 天 %d 小时)" % [b.deathCause, b.hoursAlive / 24, b.hoursAlive % 24]
 		status_label.add_theme_color_override("font_color", Color8(220, 90, 90))

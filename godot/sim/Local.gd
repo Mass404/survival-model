@@ -371,6 +371,24 @@ func peek_cell_name(k: int) -> String:
 	var kind: String = _derive_kind(k, c[0], elev_m)
 	return "%s(%d°,%d°)" % [KIND_CN.get(kind, kind), int(round(c[0])), int(round(c[1]))]
 
+# 挑一个宜居起点格(陆·中低纬·非极寒酷热·非高山·生产力最高)→ [lat,lon];供默认空降开局
+func find_spawn() -> Array:
+	var bestK := -1; var bestScore := -1.0
+	for k in Sim.SZ:
+		if world.Land[k] == 0: continue
+		var c: Array = _cell_center(k)
+		if absf(c[0]) > 55.0: continue
+		if _elev_m(k) > 2500.0: continue
+		var t: float = world.Teff(k / Sim.NLon, k % Sim.NLon)
+		if t < 2.0 or t > 38.0: continue
+		var score: float = float(world.N[k]) + float(world.H[k]) * 0.5 + 0.01   # 生产力;+ε 保证有解
+		if score > bestScore: bestScore = score; bestK = k
+	if bestK < 0:                                          # 退路:任一中低纬陆格
+		for k in Sim.SZ:
+			if world.Land[k] != 0 and absf(_cell_center(k)[0]) < 45.0: bestK = k; break
+	if bestK < 0: bestK = 0
+	return _cell_center(bestK)
+
 # 土壤水平衡(逐小时):降水补给→蒸发→满溢径流→深渗补地下水→地下水慢基流(旱季泉)
 func _soil_step(L: Dictionary) -> void:
 	if L["kind"] == "cave":
