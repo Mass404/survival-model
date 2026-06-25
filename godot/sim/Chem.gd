@@ -113,6 +113,16 @@ const RX := [
 	{"id": "copper_smelt", "name": "辉铜矿吹炼", "r": {"Cu2S": 1, "O2": 1}, "p": {"Cu": 2, "SO2": 1}, "dH": -217.0, "Tign": 1473.0},
 ]
 
+# ===== #3 真热力学:Arrhenius 温度依赖 =====
+const R_GAS := 8.314             # 气体常数 J/(mol·K)
+const EA_SILICATE := 60000.0     # 硅酸盐风化表观活化能 J/mol(实测 50–80 kJ/mol;定地质碳循环恒温器的温度敏感)
+# Arrhenius 速率因子 exp(-Ea/R·(1/T−1/T0)),归一到参考温 refC(℃)处=1。tempC/refC 单位℃。
+# Ea=60kJ/mol 时 +10℃≈2.3×(真实风化 Q10),冷→指数变慢、暖→指数变快。
+static func arrhenius(tempC: float, Ea: float, refC: float) -> float:
+	var T: float = max(1.0, tempC + 273.15)
+	var T0: float = refC + 273.15
+	return exp(-Ea / R_GAS * (1.0 / T - 1.0 / T0))
+
 # 摩尔质量 g/mol(由组成算)
 static func molar_mass(sp: String) -> float:
 	var m := 0.0
