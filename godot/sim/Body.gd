@@ -21,6 +21,15 @@ const PROT_MOSM := 4.0        # 蛋白产溶质 mOsm/g
 const SALT_MOSM := 35.0       # 盐产溶质 mOsm/g
 const PROT_KCAL := 4.0        # 蛋白能量 kcal/g
 const DEHYDR_DEATH := 15.0    # 脱水致死 %
+const HEATCAP := 58.0         # 体热容 kcal/℃(70kg)
+const CONDUCT := 6.0          # 散热导率 kcal/(h·℃)(最简装备生存者,非实验室全裸;热中性≈24℃)
+const SHIVER_MAX := 300.0     # 颤抖最大额外产热 kcal/h
+const SHIVER_T := 36.5        # 颤抖启动核心温
+const EVAP_KCAL := 0.58       # 汗液蒸发散热 kcal/mL
+const HYPO_DEATH := 28.0      # 失温致死核心温
+const HYPER_DEATH := 42.0     # 热射病致死核心温
+const NA_REF := 145.0         # 血钠参考 mmol/L
+const NA_LOW := 120.0         # 低钠致死阈
 
 var waterMl := W_REF
 var glyKcal := GLY_MAX
@@ -30,6 +39,8 @@ var stoWater := 0.0
 var stoProt := 0.0
 var stoSalt := 0.0
 var pendSolute := 0.0        # 待排溶质 mOsm
+var coreT := 37.0            # 核心体温 ℃
+var naBody := 6090.0         # 全身钠 mmol(≈145 mmol/L × 42 L)
 var dead := false
 var deathCause := ""
 var hoursAlive := 0
@@ -63,9 +74,10 @@ func _stepHour(envTemp: float, activity: float) -> void:
 		# 水/蛋白/盐按同比例吸收
 		var wAbs := stoWater * f2; waterMl += wAbs; stoWater = max(0.0, stoWater - wAbs)
 		var pAbs := stoProt * f2; pendSolute += pAbs * PROT_MOSM; stoProt = max(0.0, stoProt - pAbs)
-		var sAbs := stoSalt * f2; pendSolute += sAbs * SALT_MOSM; stoSalt = max(0.0, stoSalt - sAbs)
+		var sAbs := stoSalt * f2; pendSolute += sAbs * SALT_MOSM; stoSalt = max(0.0, stoSalt - sAbs); naBody += sAbs * 17.1
 	# —— 能量消耗 BMR×活动:先抽糖原,后抽脂肪 ——
-	var burn := BMR_H * activity
+	var shiver: float = clampf((SHIVER_T - coreT) * 120.0, 0.0, SHIVER_MAX) if coreT < SHIVER_T else 0.0
+	var burn := BMR_H * activity + shiver        # 颤抖额外产热(烧燃料)
 	if glyKcal >= burn:
 		glyKcal -= burn
 	else:
@@ -76,6 +88,9 @@ func _stepHour(envTemp: float, activity: float) -> void:
 	# —— 出水:不感蒸发 + 出汗 + 尿 ——
 	var sweat: float = max(0.0, envTemp - SWEAT_T0) * SWEAT_K * (0.6 + 0.4 * activity)
 	waterMl -= INSENS_ML_H + sweat
+	naBody = max(0.0, naBody - sweat / 1000.0 * 40.0)   # 出汗丢钠(汗≈40 mmol/L)
+	# —— 体温热平衡:代谢产热 − 对环境散热 − 蒸发散热 ——
+	coreT += (burn - CONDUCT * (coreT - envTemp) - sweat * EVAP_KCAL) / HEATCAP
 	# 尿:溶质强制排水(待排溶质需要的尿量) vs 基础尿量,取大
 	var excSol: float = min(pendSolute, SOL_EXC_H)
 	var urine: float = max(URINE_BASE_ML_H, excSol / URINE_CONC * 1000.0)
@@ -83,7 +98,14 @@ func _stepHour(envTemp: float, activity: float) -> void:
 	waterMl -= urine
 	# —— 死亡判定 ——
 	hoursAlive += 1
+	var naConc: float = naBody / max(1.0, waterMl / 1000.0)
 	if dehydrationPct() >= DEHYDR_DEATH:
 		dead = true; deathCause = "脱水(%.0f%%)" % dehydrationPct()
 	elif fatG <= FAT_DEATH:
 		dead = true; deathCause = "饿死(脂肪耗尽)"
+	elif coreT <= HYPO_DEATH:
+		dead = true; deathCause = "失温冻死(%.1f℃)" % coreT
+	elif coreT >= HYPER_DEATH:
+		dead = true; deathCause = "热射病(%.1f℃)" % coreT
+	elif naConc <= NA_LOW:
+		dead = true; deathCause = "低钠血症(%.0f mmol/L)" % naConc

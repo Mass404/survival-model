@@ -259,14 +259,15 @@ func _push_boundary() -> void:
 		L["radiation"] = _radiation(float(L["lat"]), float(L["elev"]))   # 辐射剂量(磁层+海拔)
 		var veg: float = world.N[k] + world.H[k] * 0.5     # 生产者+食草(可猎)
 		if L["kind"] == "coast": veg += 8.0 + max(0.0, -tide) * 10.0    # 海产 + 低潮露滩→更多觅食
-		L["foodCap"] = veg * 60.0                          # kcal 容量
-		L["food"] = min(float(L["food"]) + L["foodCap"] * 0.04, L["foodCap"])  # 水由 _soil_step 算
+		L["foodCap"] = veg * 90.0                          # kcal 容量
+		L["food"] = min(float(L["food"]) + L["foodCap"] * 0.12, L["foodCap"])  # 再生(够养觅食者);水由 _soil_step 算
 
 # 觅食:从当前地点采集食物/水喂给身体(消耗地点存量,会再生)
 func forage(hours: int) -> void:
 	var L = cur_loc()
-	var gotW: float = min(L.get("water", 0.0), 350.0 * hours)
-	L["water"] = L.get("water", 0.0) - gotW; body.drink(gotW)
+	var need: float = max(0.0, (BodyS.W_REF + 500.0) - body.waterMl)   # 喝到解渴(参考体水+小缓冲),不灌爆→防水中毒/低钠
+	var gotW: float = min(float(L["water"]), min(350.0 * hours, need))
+	L["water"] = float(L["water"]) - gotW; body.drink(gotW)
 	var gotF: float = min(L.get("food", 0.0), 220.0 * hours)
 	L["food"] = L.get("food", 0.0) - gotF
 	if gotF > 0.0: body.eat(gotF, gotF * 0.6, gotF * 0.04, 0.08)   # 植物/猎物:带水、少量蛋白

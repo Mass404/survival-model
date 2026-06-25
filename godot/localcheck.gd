@@ -5,6 +5,7 @@ extends SceneTree
 const Sim = preload("res://sim/World.gd")
 const GeoS = preload("res://sim/Geo.gd")
 const LocalS = preload("res://sim/Local.gd")
+const BodyS = preload("res://sim/Body.gd")
 
 func _initialize() -> void:
 	var g = GeoS.new(); g.generate()
@@ -27,7 +28,7 @@ func _initialize() -> void:
 	var distinct: bool = (tmax - tmin) > 10.0
 
 	# ② 身体:断水断食,放在极地(高耗),应在合理天数内死亡
-	loc.player = 3   # 极地苔原
+	loc.player = 1   # 温带林(失温归 L9 验,这里验局部气候下断供脱水)
 	var survived_h := 0
 	for m in 12 * 24 * 60:                          # 最多跑 12 天(分钟)
 		loc.step(1)
@@ -42,12 +43,12 @@ func _initialize() -> void:
 	var traveled: bool = ok_start and loc2.player == 2 and loc2.traveling == null
 
 	# ④ 觅食生存闭环:温带林里觅食者熬过 30 天,断供者饿死/渴死
-	var fora = LocalS.new(); fora.setup(w, g); fora.player = 1; fora.auto_forage = true
+	var fora = LocalS.new(); fora.setup(w, g); fora.player = 0; fora.auto_forage = true
 	for m in 30 * 24 * 60:
 		fora.step(1)
 		if fora.body.dead: break
 	var forager_lives: bool = not fora.body.dead
-	var idle = LocalS.new(); idle.setup(w, g); idle.player = 1; idle.auto_forage = false
+	var idle = LocalS.new(); idle.setup(w, g); idle.player = 0; idle.auto_forage = false
 	for m in 30 * 24 * 60:
 		idle.step(1)
 		if idle.body.dead: break
@@ -68,7 +69,7 @@ func _initialize() -> void:
 	print("昼夜温差·同纬度(林 %.1f℃ vs 洞穴 %.1f℃): %s" % [fSwing, vSwing, "✅" if daynight else "❌"])
 	print("身体在局部气候推进+断供致死(存活 %dh,因:%s): %s" % [survived_h, loc.body.deathCause, "✅" if bodyworks else "❌"])
 	print("玩家旅行到目标地点: %s" % ("✅" if traveled else "❌"))
-	print("觅食生存闭环(温带林觅食者活过30天 / 断供者死@%dh): %s" % [idle.body.hoursAlive, "✅" if loop_works else "❌"])
+	print("觅食生存闭环(觅食者 %s @%dh / 断供者死@%dh): %s" % [("存活" if not fora.body.dead else ("死于" + fora.body.deathCause)), fora.body.hoursAlive, idle.body.hoursAlive, "✅" if loop_works else "❌"])
 
 	# ⑥ L2 每地点全态:岩性多样 + 高程多样 + 地下水基流泉运转 + 土壤水有界
 	var liths := {}; var elevs := {}
@@ -154,4 +155,21 @@ func _initialize() -> void:
 		if L["lithified"]: lithified += 1; sedLith = L["lith"]
 	var l8ok: bool = quakes > 0 and lithified > 0
 	print("L8 局部地质(地震%d次 · 固结成岩%d处 例[%s]): %s" % [quakes, lithified, sedLith, "✅" if l8ok else "❌"])
-	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok and l6ok and l7ok and l8ok) else 1)
+
+	# ⑬ L9 人体深化:严寒失温冻死 / 温和维持体温 / 出汗丢钠(低钠风险)
+	var bc = BodyS.new()
+	for h in 72:
+		bc.drink(70)                        # 只补失水(≈不感蒸发+尿),不过量→排除脱水/低钠,只剩失温
+		bc.step(1, -45.0, 1.0)              # 极寒:颤抖最大产热也补不回散热→核心温跌破→冻死
+		if bc.dead: break
+	var froze: bool = bc.dead and bc.deathCause.contains("失温")
+	var bw = BodyS.new()
+	for h in 72: bw.drink(70); bw.step(1, 24.0, 1.0)
+	var warmOk: bool = (not bw.dead) and bw.coreT > 34.0
+	var na0: float = bw.naBody
+	var bh = BodyS.new()
+	for h in 24: bh.drink(300); bh.step(1, 38.0, 1.3)   # 高温重汗
+	var naLoss: bool = bh.naBody < na0
+	var l9ok: bool = froze and warmOk and naLoss
+	print("L9 人体(严寒%dh→%s · 温和体温%.1f℃ · 重汗丢钠%s): %s" % [bc.hoursAlive, bc.deathCause, bw.coreT, str(naLoss), "✅" if l9ok else "❌"])
+	quit(0 if (distinct and bodyworks and traveled and loop_works and daynight and l2ok and l3ok and l4ok and l5ok and l6ok and l7ok and l8ok and l9ok) else 1)
