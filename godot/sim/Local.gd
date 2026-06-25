@@ -16,6 +16,9 @@ var body                      # Body 实例(玩家身体)
 var traveling = null          # {to,left,tot}
 var total := 0                # 分钟计数
 var auto_forage := false      # 开则每小时自动觅食(供验证/简单 AI)
+# 天体配置(支持多恒星;默认单日地球态)。flux 相对地球, dayLen 自转周期(分钟), phase 相位
+var SUNS := [{"flux": 1.0, "dayLen": 1440.0, "phase": 0.0}]
+const DIURNAL := {"coast": 4.0, "forest": 9.0, "mountain": 11.0, "tundra": 7.0, "cave": 1.0}  # 昼夜温差幅(海洋/洞穴小)
 
 func setup(w, g) -> void:
 	world = w
@@ -33,9 +36,10 @@ func _build() -> void:
 	]
 	routes = [[0, 1, 600], [1, 2, 400], [1, 4, 120], [1, 3, 1200]]
 	_push_boundary()
+	_update_temps()
 
-# PushBoundary:全球行星某(纬,经)的有效气温 → 地点环境(地形调制)
-func _env_temp(lat: float, lon: float, kind: String) -> float:
+# PushBoundary:全球行星某(纬,经)的有效气温 → 地点日均环境温(地形调制)
+func _mean_temp(lat: float, lon: float, kind: String) -> float:
 	var j: int = clampi(int((lat + 90.0) / 180.0 * Sim.NLat), 0, Sim.NLat - 1)
 	var i: int = ((int(lon / 360.0 * Sim.NLon)) % Sim.NLon + Sim.NLon) % Sim.NLon
 	var t: float = world.Teff(j, i)
@@ -51,9 +55,31 @@ func _cell(lat: float, lon: float) -> int:
 	var i: int = ((int(lon / 360.0 * Sim.NLon)) % Sim.NLon + Sim.NLon) % Sim.NLon
 	return j * Sim.NLon + i
 
+# 逐分钟太阳高度→日照(移植 world.html sunElev/sunF;多恒星求和)
+func _sun_flux(lat: float, doy: int) -> float:
+	var phi := lat * PI / 180.0
+	var de: float = world.decl(doy) * PI / 180.0
+	var s := 0.0
+	for su in SUNS:
+		var frac: float = fmod(float(total) / float(su["dayLen"]) + float(su["phase"]), 1.0)
+		var hangle := 2.0 * PI * frac - PI
+		var e := sin(phi) * sin(de) + cos(phi) * cos(de) * cos(hangle)
+		if e > 0.0: s += float(su["flux"]) * e
+	return s
+
+# 瞬时温 = 日均(全球喂)+ 昼夜摆动(太阳几何驱动:正午暖/夜里冷)
+func _inst_temp(L: Dictionary) -> float:
+	var doy: int = int(float(total) / 1440.0) % Sim.YEAR
+	var sf := _sun_flux(L["lat"], doy)
+	var amp: float = DIURNAL.get(L["kind"], 8.0)
+	return float(L["meanTemp"]) + amp * (sf - 0.35)
+
+func _update_temps() -> void:
+	for L in locs: L["envTemp"] = _inst_temp(L)
+
 func _push_boundary() -> void:
 	for L in locs:
-		L["envTemp"] = _env_temp(L["lat"], L["lon"], L["kind"])
+		L["meanTemp"] = _mean_temp(L["lat"], L["lon"], L["kind"])
 		# 资源:食物=当地植被(全球 N 生物量) + 海岸海产;水=降水(淡水)。按容量再生
 		var k: int = _cell(L["lat"], L["lon"])
 		var veg: float = world.N[k] + world.H[k] * 0.5     # 生产者+食草(可猎)
@@ -98,8 +124,9 @@ func step(minutes: int) -> void:
 			traveling["left"] -= 1
 			if traveling["left"] <= 0:
 				player = traveling["to"]; traveling = null
-		if total % 60 == 0:                          # 每小时:刷新边界 + 觅食 + 推进身体
+		if total % 60 == 0:                          # 每小时:刷新边界(日均)+ 昼夜瞬时温 + 觅食 + 身体
 			_push_boundary()
+			_update_temps()
 			if auto_forage and traveling == null: forage(1)
 			var env: float = cur_loc()["envTemp"]
 			var act: float = 1.4 if traveling != null else 1.0   # 旅途更耗
