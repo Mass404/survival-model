@@ -119,14 +119,15 @@ const lipDecay := 0.002  # 脂质降解率
 const oCfrac := 0.001    # 有机↔无机碳转换(守恒;world.html 0.02,按 Godot org 量级重标到痕量,免抽干大气)
 const ORG_IGNITE := 2.5  # 有机汤(org+prot)点燃阈值(world.html rIgnite=5,按 Godot org 量级重标)
 # 食物网(Holling-II 捕食,饱和→稳定;系数按 stepLife dt=10 标定,validate 验金字塔/共存)
-const FW_HALF := 8.0       # 半饱和猎物量
+const FW_HALF := 8.0       # 半饱和猎物量(食草者对生产者)
+const FW_HALF_C := 3.0     # 食肉者半饱和(低→稀疏猎物也能立足;粗网格一格=巨大面积)
 const FW_GRAZE := 0.5      # 单位捕食者最大摄食压
 const FW_YIELD := 0.25     # 营养传递效率
-const FW_MH := 0.08        # 食草者死亡率
-const FW_MC := 0.05        # 食肉者死亡率
+const FW_MH := 0.04        # 食草者死亡率(给反防御裕度,使防御猎物上仍可存活)
+const FW_MC := 0.03        # 食肉者死亡率(低→扛过猎物崩,持续共存)
 const FW_SEEDN := 5.0      # 生产者够多→点燃食草者
-const FW_SEEDH := 2.0      # 食草者够多→点燃食肉者
-const FW_DIFF := 0.15      # 消费者扩散率
+const FW_SEEDH := 1.0      # 食草者够多→点燃食肉者
+const FW_DIFF := 0.10      # 消费者扩散率(低→消费者聚集在高产格,单格密度足以支撑上一营养级)
 # 有性生殖(红皇后)+ 寄生
 const SEX_K := 0.05        # rSex 演化速率
 const SEX_COST := 0.12     # 有性的双倍成本(无压力时拉回克隆)
@@ -731,9 +732,9 @@ func stepLife(dt: float) -> void:
 				var szc := clampf(rSize[k], 0.0, 1.0)
 				rEuk[k] = clampf(rEuk[k] + euAdaptK * dl * (euGain * o2f * clampf(szc * 2.0, 0.0, 1.0) - euCost), 0.0, 1.0)   # 富氧+体型→真核化
 				var predP := clampf(H[k] / 5.0, 0.0, 1.0)
-				rSize[k] = clampf(rSize[k] + sizeAdaptK * dl * (predP * 0.5 + 0.3 - 0.4), 0.0, 1.0)   # 捕食压→大体型(防御)
+				rSize[k] = clampf(rSize[k] + sizeAdaptK * dl * (predP * 0.5 + o2f * 0.4 - 0.35), 0.0, 1.0)   # 捕食压+富氧→大体型(O₂使大体型可行=寒武体型爆发;缺氧压着)
 				var euG := clampf(rEuk[k] * 2.0, 0.0, 1.0)
-				rMulti[k] = clampf(rMulti[k] + multiAdaptK * dl * (euG * predP * multiDef - multiCost), 0.0, 1.0)   # 真核×捕食压→多细胞
+				rMulti[k] = clampf(rMulti[k] + multiAdaptK * dl * (euG * (0.2 + 0.8 * predP) * multiDef - multiCost), 0.0, 1.0)   # 真核使能(基线)+捕食压加速→多细胞
 				var muG := clampf(rMulti[k] * 2.0, 0.0, 1.0)
 				rDiff[k] = clampf(rDiff[k] + diffAdaptK * dl * (muG * (0.6 + predP * 0.5) - diffCost), 0.0, 1.0)   # 多细胞×(稳定+捕食)→分化
 				var minAvail := clampf(disE[k * NE + 1] / 150.0, 0.0, 1.0)
@@ -805,14 +806,15 @@ func stepLife(dt: float) -> void:
 		var nv := N[k]
 		if H[k] < SEED and nv > FW_SEEDN: H[k] = SEED
 		if H[k] > 0.0:
-			var szD: float = (1.0 - 0.6 * clampf(rSize[k], 0.0, 1.0)) * (1.0 - 0.9 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - shellDef * clampf(rShell[k], 0.0, 1.0)) * (1.0 - neuroEvade * clampf(rNeuro[k], 0.0, 1.0))   # 防御:体型/多细胞/壳/神经→减免被捕食
+			# 防御:体型/多细胞/壳/神经→减免被捕食。设地板(捕食者反适应/军备竞赛:防御抬高摄食难度但不归零)
+			var szD: float = maxf(0.45, (1.0 - 0.6 * clampf(rSize[k], 0.0, 1.0)) * (1.0 - 0.9 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - shellDef * clampf(rShell[k], 0.0, 1.0)) * (1.0 - neuroEvade * clampf(rNeuro[k], 0.0, 1.0)))
 			var graze: float = min(FW_GRAZE * H[k] * (nv / (nv + FW_HALF)) * szD * ds, nv * 0.5)
 			N[k] = nv - graze
 			H[k] = max(0.0, H[k] + FW_YIELD * graze - FW_MH * H[k] * ds)
 		var hv := H[k]
 		if C[k] < SEED and hv > FW_SEEDH: C[k] = SEED
 		if C[k] > 0.0:
-			var graze2: float = min(FW_GRAZE * C[k] * (hv / (hv + FW_HALF)) * ds, hv * 0.5)
+			var graze2: float = min(FW_GRAZE * C[k] * (hv / (hv + FW_HALF_C)) * ds, hv * 0.5)
 			H[k] = hv - graze2
 			C[k] = max(0.0, C[k] + FW_YIELD * graze2 - FW_MC * C[k] * ds)
 	_diffuse(H, FW_DIFF * ds)
