@@ -6,8 +6,8 @@ const Sim = preload("res://sim/World.gd")
 func _initialize() -> void:
 	var w = Sim.new()
 	w.spinUp()
-	var c0: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC + w.bioC
-	var n0: float = w.atmN2 + w.availN
+	var c0: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC + w.bioC + w.escapedC
+	var n0: float = w.atmN2 + w.availN + w.escapedN
 	print("spin-up 后  总碳 %.6f  总氮 %.6f" % [c0, n0])
 	var day := 0
 	var goe := -1
@@ -22,8 +22,8 @@ func _initialize() -> void:
 				var nt: float = w.atmN2 + w.availN
 				print("  第%3d年  总碳 %.6f  总氮 %.6f | 大气CO2 %.2f  O2 %.2f  还原库 %.0f  化石 %.1f" % [w.geoT, ct, nt, w.globalCO2, w.globalO2, w.globalRed, w.fosC])
 		day += 1
-	var c1: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC + w.bioC
-	var n1: float = w.atmN2 + w.availN
+	var c1: float = w.globalCO2 + w.ocnC + w.fosC + w.rockC + w.organicC + w.bioC + w.escapedC
+	var n1: float = w.atmN2 + w.availN + w.escapedN
 	print("================ 守恒账本验证 ================")
 	print("末态库 organicC=%.3f bioC=%.3f fosC=%.3f" % [w.organicC, w.bioC, w.fosC])
 	print("碳: 初 %.6f → 末 %.6f" % [c0, c1]); print("   碳漂移 = ", c1 - c0)

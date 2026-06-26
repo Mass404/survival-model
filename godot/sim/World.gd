@@ -268,6 +268,12 @@ const MAG_BCRIT := 20.0       # 屏蔽住太阳风/锁住辐射所需场 μT
 var planet_radio := 1.0       # 放射性燃料基准(U/Th/K),地球=1;贫金属第一代→几乎无→冷核
 var planet_rot_h := 24.0      # 自转周期(小时),越快磁场越强
 var planet_radius_km := 6371.0   # 行星半径 km(小行星散热快→核活动低)
+var planet_mass_e := 1.0         # 行星质量(地球=1);定表面重力/逃逸速度→大气保持能力
+# 大气逃逸(太阳风剥离,非热逃逸为主):无磁场→太阳风剥大气(火星化);小重力→更易逃逸。
+# 接 R5 磁层 + R4 金属丰度:贫金属→无发电机→磁场塌→大气被剥→死星。地球(强场)逃逸=0→守恒不动。
+const STRIP_K := 0.04            # 太阳风剥离基率(每地质年,对无屏蔽大气)
+var escapedC := 0.0             # 累计逃逸到太空的碳(均值量纲,守恒账)
+var escapedN := 0.0             # 累计逃逸到太空的氮
 
 func core_activity() -> float:   # 核对流活动 = 放射成因热/散热(∝1/R):地球≈1稳定;小星/贫铀→偏低
 	var radio_fuel: float = planet_radio * pow(metallicity, 1.3)   # 重元素(SN产)对代数更敏感
@@ -1053,12 +1059,29 @@ func stepGeo() -> void:
 	snowStep()
 	_seaStep()
 	carbonStep()
+	atmosphereEscape()
 	elementStep()
 	ventStep()
 	riverStep()
 	lithifyStep()
 	massExtinctionCheck(updateSpecies())
 	_track_events()
+
+# 大气逃逸(逐地质年):太阳风剥离 = 基率 ×(1−磁屏蔽)÷ 表面重力。守恒到 escapedC/N(逃逸到太空)。
+# 地球(mag_shield=1)→剥离0→守恒不动;贫金属/无发电机→屏蔽塌→大气被剥→CO₂/N₂ 流失→死星。
+func atmosphereEscape() -> void:
+	var shield: float = mag_shield()
+	if shield >= 1.0: return                                  # 强磁场全屏蔽,无剥离(地球态)
+	var grav: float = planet_mass_e / pow(planet_radius_km / 6371.0, 2.0)   # 表面重力(地球=1);小重力→易逃逸
+	var strip: float = clampf(STRIP_K * (1.0 - shield) / maxf(0.2, grav), 0.0, 0.5)
+	if strip <= 0.0: return
+	var lostC := 0.0
+	for k in SZ:
+		var l: float = Co2[k] * strip; Co2[k] -= l; lostC += l
+	escapedC += lostC / float(SZ)                             # 均值量纲(与 globalCO2 一致)→守恒账
+	globalCO2 = maxf(0.0, globalCO2 - lostC / float(SZ))
+	var lostN: float = atmN2 * strip; atmN2 -= lostN; escapedN += lostN
+	globalO2 = maxf(0.0, globalO2 * (1.0 - strip))            # O₂ 也被剥(不入碳氮守恒账)
 
 func _push_event(icon: String, text: String) -> void:
 	events.append({"ky": geoT, "icon": icon, "text": text})
@@ -1101,6 +1124,7 @@ func spinUp() -> void:
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
 	MOC = 1.0; geoT = 0; climCool = 0.0; globalCO2 = 2.0; impactWinter = 0.0
+	escapedC = 0.0; escapedN = 0.0
 	iceVol = 0.0; refIce = -1.0; seaOffset = 0.0
 	Co2 = gridF(CO2ref); ocnC = 2.0; fosC = 0.0; rockC = 10000.0; globalO2 = 0.0; globalRed = 4.0; atmN2 = 1000.0; availN = 2.0; organicC = 0.0; bioC = 0.0; o2Prod = 0.0
 	disE = PackedFloat64Array(); disE.resize(SZ * NE)
