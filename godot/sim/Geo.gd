@@ -126,6 +126,36 @@ func _init_tect() -> void:
 		var gy: int = clampi(int(float(c.j) / RYf * ROWS), 0, ROWS - 1)
 		hotspots.append(gy * COLS + gx)
 	_eros.resize(COLS * ROWS)
+	_init_plates()
+
+# ---------- 板块构造:网格划成 NPLATE 个板块(Voronoi),各有确定性漂移速度 ----------
+# 板块构造的定义性特征=地质活动集中在板块边界:汇聚边界造山(喜马拉雅/安第斯)、离散边界裂谷成新洋(中脊)。
+const NPLATE := 7
+const BOUND_K := 0.005     # 边界构造强度(汇聚抬升/离散沉降,每地质年)
+var plate := PackedInt32Array()    # 每格板块 id
+var plateV := []                   # 每板块漂移速度向量 [vx,vy](确定性,黄金角散布)
+
+func _init_plates() -> void:
+	var seeds := []
+	plateV = []
+	for p in NPLATE:
+		var sx: int = int((0.10 + 0.80 * fmod(p * 0.3714, 1.0)) * COLS)
+		var sy: int = int((0.12 + 0.76 * fmod(p * 0.6180, 1.0)) * ROWS)
+		seeds.append([sx, sy])
+		var ang: float = float(p) * 2.399963229728653   # 黄金角→方向散布(确定性)
+		plateV.append([cos(ang), sin(ang)])
+	plate = PackedInt32Array(); plate.resize(COLS * ROWS)
+	for gy in ROWS:
+		for gx in COLS:
+			var best := 0; var bd := 1.0e18
+			for p in NPLATE:
+				var dx: int = gx - int(seeds[p][0])
+				if dx > COLS / 2: dx -= COLS
+				elif dx < -COLS / 2: dx += COLS          # 经度环绕
+				var dy: int = gy - int(seeds[p][1])
+				var d: float = float(dx * dx + dy * dy)
+				if d < bd: bd = d; best = p
+			plate[gy * COLS + gx] = best
 
 func tectonics() -> int:
 	if hotspots.is_empty(): _init_tect()
@@ -144,6 +174,23 @@ func tectonics() -> int:
 					var nx := clampi(hx + dx, 0, COLS - 1)
 					elev[ny * COLS + nx] += LAVA * 0.35
 			erupted += 1
+	# 板块边界构造(每地质年):汇聚边界→造山抬升、离散边界→裂谷沉降成新洋。地质活动集中在边界=板块构造定义性特征。
+	for gy in ROWS:
+		for gx in COLS:
+			var idx := gy * COLS + gx
+			var pa: int = plate[idx]
+			var va: Array = plateV[pa]
+			var up := 0.0
+			for d in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+				var ny: int = gy + d[0]
+				if ny < 0 or ny >= ROWS: continue
+				var nx: int = (gx + d[1] + COLS) % COLS
+				var pb: int = plate[ny * COLS + nx]
+				if pb == pa: continue
+				var vb: Array = plateV[pb]
+				# 相对运动沿边界法向(x=d[1],y=d[0]):>0 汇聚(造山)、<0 离散(裂谷)
+				up += (float(va[0]) - float(vb[0])) * float(d[1]) + (float(va[1]) - float(vb[1])) * float(d[0])
+			if up != 0.0: elev[idx] += BOUND_K * up
 	# 侵蚀:陆地高程向四邻均值回落(降 relief,确定性扩散)
 	for idx in COLS * ROWS: _eros[idx] = elev[idx]
 	for gy in ROWS:
