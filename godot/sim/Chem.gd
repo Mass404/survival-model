@@ -128,6 +128,12 @@ static func arrhenius(tempC: float, Ea: float, refC: float) -> float:
 static func ksp_caco3_factor(tempC: float) -> float:
 	return pow(10.0, 0.02 * (25.0 - tempC))
 
+# 海洋 pH(碳酸缓冲 Henderson-Hasselbalch):pH = pK1 + log10(碱度/pCO₂)。
+# 高 CO₂→酸化(pH↓)、高碱度(Ca+碳酸盐风化补给)→pH↑。地球标定≈8.1。
+const PK1_CARBONIC := 6.4   # 碳酸一级解离 pK1
+static func ocean_ph(pco2: float, alkalinity: float) -> float:
+	return PK1_CARBONIC + log(maxf(alkalinity, 1e-3) / maxf(pco2, 1e-3)) / log(10.0)
+
 # 摩尔质量 g/mol(由组成算)
 static func molar_mass(sp: String) -> float:
 	var m := 0.0
