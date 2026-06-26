@@ -45,17 +45,25 @@ func _initialize() -> void:
 	var active: bool = depSum > 1.0 and landDis > 1.0
 	print("逐元素守恒: %s" % ("✅ 一克不差" if conserved else "❌ 漂了"))
 	print("风化/沉积活跃: %s" % ("✅" if active else "❌"))
-	# G1 逐格岩性异质:岩性多样 + 陆地铀沉积(花岗岩富)在格间分异
+	# G1 逐格岩性异质:岩性多样 + 成矿在格间分异。
+	# 注:成矿异质用 Cu(immobile 矿:喷口/砂矿富集)测——U 是地化最易迁移元素(易溶随河进海),
+	#     不该当"成矿异质"代理(旧版用 U 在加 G3 河网后失效:U 全冲进海洋黑页岩)。
 	var lithSet := {}
-	var uMax := 0.0; var uMin := 1e9
+	var cuMax := 0.0; var cuMin := 1e9
 	for k in Sim.SZ:
 		lithSet[w.Lith[k]] = true
 		if w.Land[k] != 0:
-			var u: float = w.depE[k * Sim.NE + 23]
-			uMax = max(uMax, u); uMin = min(uMin, u)
-	var hetero: bool = lithSet.size() >= 3 and uMax > uMin + 0.3
-	print("G1 逐格岩性异质(岩性%d种 · 陆U沉积 %.2f~%.2f): %s" % [lithSet.size(), uMin, uMax, "✅" if hetero else "❌"])
-	quit(0 if (conserved and active and hetero) else 1)
+			var cu: float = w.depE[k * Sim.NE + 9]
+			cuMax = max(cuMax, cu); cuMin = min(cuMin, cu)
+	var hetero: bool = lithSet.size() >= 3 and cuMax > cuMin + 0.3
+	print("G1 逐格岩性异质(岩性%d种 · 陆Cu沉积 %.2f~%.2f): %s" % [lithSet.size(), cuMin, cuMax, "✅" if hetero else "❌"])
+	# 真铀地化(redox 成矿):U 氧化态可溶、还原态沉淀——海里 U 现在主要是沉淀态(黑页岩)而非永远溶解
+	var uDis := 0.0; var uDep := 0.0
+	for k in Sim.SZ:
+		uDis += w.disE[k * Sim.NE + 23]; uDep += w.depE[k * Sim.NE + 23]
+	var redoxU: bool = uDep > uDis * 5.0
+	print("redox 铀成矿(U 沉淀%.1f ≫ 溶解%.2f→还原沉成黑页岩,非永溶): %s" % [uDep, uDis, "✅" if redoxU else "❌"])
+	quit(0 if (conserved and active and hetero and redoxU) else 1)
 
 func _seaAvg(w, e: int) -> float:
 	var s := 0.0; var n := 0
