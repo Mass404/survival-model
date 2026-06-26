@@ -123,6 +123,11 @@ static func arrhenius(tempC: float, Ea: float, refC: float) -> float:
 	var T0: float = refC + 273.15
 	return exp(-Ea / R_GAS * (1.0 / T - 1.0 / T0))
 
+# 碳酸钙 Ksp 的逆行溶解度因子(归一 25℃=1):暖→Ksp 小(更易过饱和沉淀)、冷→Ksp 大。
+# 真实反直觉性质——CaCO₃ 溶解度随温升而降(CO₂ 逸出+逆行),所以热带浅海是碳酸盐工厂/长灰岩、深冷水溶解。
+static func ksp_caco3_factor(tempC: float) -> float:
+	return pow(10.0, 0.02 * (25.0 - tempC))
+
 # 摩尔质量 g/mol(由组成算)
 static func molar_mass(sp: String) -> float:
 	var m := 0.0
