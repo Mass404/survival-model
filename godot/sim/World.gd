@@ -812,7 +812,7 @@ func stepLife(dt: float) -> void:
 		if H[k] < SEED and nv > FW_SEEDN: H[k] = SEED
 		if H[k] > 0.0:
 			# 防御:体型/多细胞/壳/神经→减免被捕食。设地板(捕食者反适应/军备竞赛:防御抬高摄食难度但不归零)
-			var szD: float = maxf(0.45, (1.0 - 0.6 * clampf(rSize[k], 0.0, 1.0)) * (1.0 - 0.9 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - shellDef * clampf(rShell[k], 0.0, 1.0)) * (1.0 - neuroEvade * clampf(rNeuro[k], 0.0, 1.0)))
+			var szD: float = maxf(0.7, (1.0 - 0.6 * clampf(rSize[k], 0.0, 1.0)) * (1.0 - 0.9 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - shellDef * clampf(rShell[k], 0.0, 1.0)) * (1.0 - neuroEvade * clampf(rNeuro[k], 0.0, 1.0)))
 			var graze: float = min(FW_GRAZE * H[k] * (nv / (nv + FW_HALF)) * szD * ds, nv * 0.5)
 			N[k] = nv - graze
 			H[k] = max(0.0, H[k] + FW_YIELD * graze - FW_MH * H[k] * ds)
