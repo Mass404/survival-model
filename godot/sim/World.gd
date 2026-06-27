@@ -76,6 +76,12 @@ var Sym := PackedFloat64Array()
 var Seg := PackedFloat64Array()
 var Limb := PackedFloat64Array()
 var Axis := PackedFloat64Array()
+# A层 基因型→表型(开放式进化地基):每格6基因→sigmoid(Wg−bias)develop出复杂度链6性状,演化作用在基因上(零随机)
+var geneE := PackedFloat64Array()   # 每格6基因,索引 k*GENE_K+g(0体型1真核2多胞3壳4神经5温血)
+var _devW := []                     # 6×6 发育矩阵(spinUp 确定性构造:对角占优+sin耦合)
+const GENE_K := 6
+const DEV_BIAS := 2.0               # 发育偏置:gene=0→性状≈0.12(落 sigmoid 响应区,避尾部梯度消失)
+const GENE_ETA := 2.0               # 基因梯度学习率(反传)
 
 # ---------- 预分配缓冲 / 缓存 ----------
 var _s0 := PackedFloat64Array()
@@ -734,20 +740,34 @@ func stepLife(dt: float) -> void:
 				rAuto[k] = clampf(a + rAutoAdaptK * dl * (maxf(wChemo, wPhoto) - wHet), 0.0, 1.0)
 				rPhoto[k] = clampf(p + rAutoAdaptK * dl * (wPhoto - wChemo), 0.0, 1.0)
 				rAero[k] = clampf(rAero[k] + rAeroAdaptK * dl * (aerBoost * o2f + 3.0 * redox - aerCostSel), 0.0, 1.0)   # 富氧→好氧度升,缺氧→纯成本归零
-				var szc := clampf(rSize[k], 0.0, 1.0)
-				rEuk[k] = clampf(rEuk[k] + euAdaptK * dl * (euGain * o2f * clampf(szc * 2.0, 0.0, 1.0) - euCost), 0.0, 1.0)   # 富氧+体型→真核化
+				# A层:从基因 develop 复杂度链6性状(sigmoid(Wg−bias)),再把各性状驱动力反传到基因(零随机,守恒不碰)
+				var _gb := k * GENE_K
+				var _P := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+				for _m in GENE_K:
+					var _s := -DEV_BIAS
+					for _g in GENE_K: _s += float(_devW[_m][_g]) * geneE[_gb + _g]
+					_P[_m] = 1.0 / (1.0 + exp(-_s))
+				rSize[k] = float(_P[0]); rEuk[k] = float(_P[1]); rMulti[k] = float(_P[2]); rShell[k] = float(_P[3]); rNeuro[k] = float(_P[4]); rEndo[k] = float(_P[5])
+				var szc := float(_P[0])
+				var euG := clampf(float(_P[1]) * 2.0, 0.0, 1.0)
+				var muG := clampf(float(_P[2]) * 2.0, 0.0, 1.0)
 				var predP := clampf(H[k] / 5.0, 0.0, 1.0)
-				rSize[k] = clampf(rSize[k] + sizeAdaptK * dl * (predP * 0.5 + o2f * 0.4 - 0.35), 0.0, 1.0)   # 捕食压+富氧→大体型(O₂使大体型可行=寒武体型爆发;缺氧压着)
-				var euG := clampf(rEuk[k] * 2.0, 0.0, 1.0)
-				rMulti[k] = clampf(rMulti[k] + multiAdaptK * dl * (euG * (0.2 + 0.8 * predP) * multiDef - multiCost), 0.0, 1.0)   # 真核使能(基线)+捕食压加速→多细胞
-				var muG := clampf(rMulti[k] * 2.0, 0.0, 1.0)
-				rDiff[k] = clampf(rDiff[k] + diffAdaptK * dl * (muG * (0.6 + predP * 0.5) - diffCost), 0.0, 1.0)   # 多细胞×(稳定+捕食)→分化
 				var minAvail := clampf(disE[k * NE + 1] / 150.0, 0.0, 1.0)
-				rShell[k] = clampf(rShell[k] + shellAdaptK * dl * (muG * predP * minAvail - shellCost), 0.0, 1.0)   # 多细胞×捕食×钙→壳
 				var coldStress := clampf((12.0 - teff) / 24.0, 0.0, 1.0)
 				var nStress := clampf(1.0 - availN / 2.0, 0.0, 1.0)
-				rNeuro[k] = clampf(rNeuro[k] + neuroAdaptK * dl * (muG * clampf((Sym[k] + predP) / 1.5, 0.0, 1.0) - neuroSelCost), 0.0, 1.0)   # 多细胞×(运动+捕食)→神经
-				rEndo[k] = clampf(rEndo[k] + endoAdaptK * dl * (muG * coldStress - endoSelCost), 0.0, 1.0)   # 多细胞×冷胁迫→温血
+				var _d := [
+					sizeAdaptK * (predP * 0.5 + o2f * 0.4 - 0.35),
+					euAdaptK * (euGain * o2f * clampf(szc * 2.0, 0.0, 1.0) - euCost),
+					multiAdaptK * (euG * (0.2 + 0.8 * predP) * multiDef - multiCost),
+					shellAdaptK * (muG * predP * minAvail - shellCost),
+					neuroAdaptK * (muG * clampf((Sym[k] + predP) / 1.5, 0.0, 1.0) - neuroSelCost),
+					endoAdaptK * (muG * coldStress - endoSelCost),
+				]
+				for _g in GENE_K:
+					var _dg := 0.0
+					for _m in GENE_K: _dg += float(_d[_m]) * float(_P[_m]) * (1.0 - float(_P[_m])) * float(_devW[_m][_g])
+					geneE[_gb + _g] += GENE_ETA * dl * _dg
+				rDiff[k] = clampf(rDiff[k] + diffAdaptK * dl * (muG * (0.6 + predP * 0.5) - diffCost), 0.0, 1.0)   # 分化仍直接(未纳入基因)
 				rSymb[k] = clampf(rSymb[k] + symbAdaptK * dl * (nStress * symbBenefit - symbCost), 0.0, 1.0)   # 贫氮→共生固氮伙伴
 				var mb := 1.0 if Lip[k] > cmc else -1.0
 				rMemb[k] = clampf(rMemb[k] + membAdaptK * dl * mb, 0.0, 1.0)   # 脂质过CMC→膜泡
@@ -1193,6 +1213,12 @@ func spinUp() -> void:
 	rMulti = gridF(0.0); rDiff = gridF(0.0); rShell = gridF(0.0)
 	rNeuro = gridF(0.0); rEndo = gridF(0.0); rSymb = gridF(0.0); rMemb = gridF(0.0)
 	Sym = gridF(0.0); Seg = gridF(0.0); Limb = gridF(0.0); Axis = gridF(0.0)
+	geneE = PackedFloat64Array(); geneE.resize(SZ * GENE_K)   # 基因初值0→develop出性状≈0
+	_devW = []
+	for _m in GENE_K:
+		var _row := []
+		for _kk in GENE_K: _row.append(1.4 if _m == _kk else 0.35 * sin(float(_m) * 1.7 + float(_kk) * 2.3))
+		_devW.append(_row)
 	phylo = []; nextSp = 1; extEMA = 1.0; massExt = []
 	events = []; _seen_life = false; _in_ice = false; _in_warm = false
 	MOC = 1.0; geoT = 0; climCool = 0.0; globalCO2 = 2.0; impactWinter = 0.0
