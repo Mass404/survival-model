@@ -3,7 +3,12 @@
 接手人先读:`HANDOFF_STATUS.md`(总状态)+ 记忆 `evolution-e3e4-foodweb` / `godot-port`。
 这是给"**生物能自己进化出新性状**"做的进化内核改造。
 
-> **状态更新 2026-06-27:A 层已落地(`1f22fe4`),testsuite 35/35 全过。** 复杂度链6性状(rSize/rEuk/rMulti/rShell/rNeuro/rEndo)现在从每格6基因 `geneE` 经 `_devW` develop=sigmoid(Wg−DEV_BIAS) 涌现,演化梯度反传到基因(零随机+守恒)。下面"一/三"的设计已实现;**B 层(真开放式,§五)仍未做,启动前先和用户敲定随机性**。调试要点:DEV_BIAS=2.0(=4 时性状卡 sigmoid 尾部、rEuk 上不去 0.1)。
+> **状态更新 2026-06-27:A + B1 + B2 都已落地,testsuite 全程 35/35。** 详见记忆 `genome-layer`。
+> - **A 层(`1f22fe4`)**:复杂度链6性状从每格6基因 `geneE` 经 `_devW` develop=sigmoid(Wg−DEV_BIAS=2) 涌现,梯度反传到基因。
+> - **B1 种子突变(`fc219c3`)**:`mutSeed`+`MUT_K`+`_gnoise` 确定性哈希噪声+`geneMutate()`(逐年扰动),新颖性来源/逃局部最优;同种子 bit 一致、异种子发散(mutcheck)。用户授权的 seeded PRNG 松绑铁律③。
+> - **B2 潜在维度(`8c8cce1`)**:`N_LAT=4` 无预设含义的潜在维 `latGene`,绑环境信号 `_latsig`、弱耦合 `_latGrow` 进 gB;含义从环境×选择涌现+生态位分化(latcheck 相关0.88、主导维按区域分布)。
+> - **仍未做**:真 GRN/L-system(维度数本身可变、形态/行为=程序输出),研究级大改,启动前与用户确认。
+> 下面 §一~六 是 A 层原始设计稿(已实现),保留作背景。
 
 ## 〇、动机 / 路线(用户已拍板)
 现状:生物只在固定的~十几个性状轴上做 adaptive dynamics(值沿适应度梯度爬+跨阈解锁),**长不出程序没预设的新性状**。根因:直接在性状值上算动力学,底下没有"基因型"层。
