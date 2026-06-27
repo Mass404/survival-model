@@ -1118,15 +1118,28 @@ func _track_events() -> void:
 
 # ---------- 体制(门级)从形态变量涌现 ----------
 func bodyPlan(j: int, i: int) -> String:
+	# E4: 体制按演化复杂度分阶段(原核-真核-多细胞-寒武壳-神经-脊索-温血),从性状跨阈确定性涌现
 	var k := j * NLon + i
-	var sym: float = Sym[k]; var seg: float = Seg[k]; var limb: float = Limb[k]; var axis: float = Axis[k]
-	if sym < 0.4: return "刺胞"
-	if axis > 0.5: return "脊索"
-	if seg > 0.5 and limb > 0.4: return "节肢"
-	if seg > 0.5: return "环节"
-	return "蠕虫"
-
-# ---------- 启动:气候预热 ----------
+	var mu: float = rMulti[k]
+	var eu: float = rEuk[k]
+	var sh: float = rShell[k]
+	var nu: float = rNeuro[k]
+	var en: float = rEndo[k]
+	var ax: float = Axis[k]
+	var sym: float = Sym[k]
+	var seg: float = Seg[k]
+	var limb: float = Limb[k]
+	if mu < 0.3:
+		if eu < 0.3: return "原核菌"
+		return "真核单胞"
+	if en > 0.5: return "温血脊椎"
+	if ax > 0.5: return "脊索动物"
+	if nu > 0.5 and seg > 0.5 and limb > 0.4: return "节肢·神经"
+	if sh > 0.5: return "矿化壳·寒武"
+	if nu > 0.5: return "神经软体"
+	if seg > 0.5: return "环节软体"
+	if sym < 0.4: return "辐射软体"
+	return "软体多胞"
 func spinUp() -> void:
 	initClimate()
 	N = gridF(0.0); H = gridF(0.0); C = gridF(0.0); Hab = gridF(0.0); Topt = gridF(0.0); Salt = gridF(0.0); Dry = gridF(0.0)
