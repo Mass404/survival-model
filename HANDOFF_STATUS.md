@@ -64,7 +64,7 @@
 
 **底层世界:**
 - **N4 真大陆漂移(advection)**:N3 只做了边界地质,真正的板块平移(带着逐格化学/生命迁移)耦合极大,没做。且 `World.Elev` 逐格高程在 spinUp 后静态(只 land mask 经 `_seaStep` 逐年重算),要让漂移完全传导需重算 World.Elev。
-- 游戏 `LocalMain` 开局只跑 `for d in 180: stepDay`(无 stepLife/stepGeo)→ 矿/生物量未发育、`find_spawn` 走退路;要"在演化好的星球上求生"需开局补跑深时间。
+- ~~游戏 `LocalMain` 开局只跑 `for d in 180: stepDay`~~ **✅ 已修(`9c75518`)**:开局改深时间世界生成(`WORLDGEN_YEARS=20`:stepDay+stepLife+stepGeo)→ 玩家空降到演化好的活星球(生命371格/GOE/成矿42571),worldgencheck 验。⚠UX:世界生成较慢(GRN 迭代),生产版应配加载界面/异步或预生成(确定性同种子可复现)。微后续:find_spawn 按生产力选→可能落矿贫格(空降本地矿≈0),要"开局就近有矿"可让 find_spawn 也权衡矿。
 
 ---
 
