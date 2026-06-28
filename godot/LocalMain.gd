@@ -17,13 +17,21 @@ var travel_box: HBoxContainer
 var log_label: Label
 var _log: Array = []
 var _bars := {}
+const WORLDGEN_YEARS := 20   # 开局世界生成深时间年数(出成矿+生命+大氧化;可调:大=更演化但更慢)
 
 func _ready() -> void:
 	geo = GeoS.new(); geo.generate()
 	world = Sim.new(); world.geo = geo
 	world.land_mask = geo.coarse_land(Sim.NLat, Sim.NLon)
 	world.spinUp()
-	for d in 180: world.stepDay(d % Sim.YEAR)     # 推到温暖季,出生点宜居
+	# 世界生成:深时间演化出成矿(stepGeo)+ 生命/大氧化(stepLife),玩家空降到一颗"演化好的活星球"
+	# (而非未演化的死星)。确定性:同 mutSeed→同世界。注:这步较慢,生产版应配加载界面/异步;同种子可预生成。
+	var _wgDay := 0
+	for _s in WORLDGEN_YEARS * Sim.YEAR:
+		world.stepDay(_wgDay % Sim.YEAR)
+		if _wgDay % 10 == 0: world.stepLife(10.0)
+		if _wgDay % Sim.YEAR == 0: world.stepGeo()
+		_wgDay += 1
 	local = LocalS.new(); local.setup(world, geo)
 	var sp: Array = local.find_spawn()             # 两层统一:空降全球宜居格(取代写死地点)
 	local.enter_cell(sp[0], sp[1])
