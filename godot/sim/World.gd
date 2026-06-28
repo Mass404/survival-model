@@ -101,6 +101,9 @@ var _flow := PackedFloat64Array()
 var _fTo := PackedFloat64Array()
 var _fSa := PackedFloat64Array()
 var _fDr := PackedFloat64Array()
+var _fGeneE := PackedFloat64Array()   # IH 继承层:基因组随生物量迁移携带(质量加权=遗传+基因流)
+var _fLatGene := PackedFloat64Array()
+var _fLatGate := PackedFloat64Array()
 var _comp := PackedInt32Array()
 var _LAT := PackedFloat64Array()   # 每纬度 latof(j)
 var _UB := PackedFloat64Array()    # 每纬度 uband(latof(j))
@@ -365,6 +368,7 @@ func _init() -> void:
 		_UB[j] = uband(_LAT[j])
 		UMAX = max(UMAX, abs(_UB[j]))
 	for buf in [_s0, _sl0, _t1, _flow, _fTo, _fSa, _fDr]: buf.resize(SZ)
+	_fGeneE.resize(SZ * GENE_K); _fLatGene.resize(SZ * N_LAT); _fLatGate.resize(SZ * N_LAT)
 	_comp.resize(SZ)
 
 # ---------- 几何 / 物理小函数 ----------
@@ -818,6 +822,7 @@ func stepLife(dt: float) -> void:
 			Axis[k] = clampf(Axis[k] + morphK * (gS * sizeP - Axis[k] - morphCost), 0.0, 1.0)
 	# 四邻扩散 + 带性状迁移(守恒)
 	_flow.fill(0.0); _fTo.fill(0.0); _fSa.fill(0.0); _fDr.fill(0.0)
+	_fGeneE.fill(0.0); _fLatGene.fill(0.0); _fLatGate.fill(0.0)
 	var f := clampf(MOVE * dt / 10.0, 0.0, 0.24)
 	for j in NLat:
 		var jb := j * NLon
@@ -833,6 +838,12 @@ func stepLife(dt: float) -> void:
 				var mv: float = f * bar * max(0.0, (nv - N[bk]) * 0.5) * Hab[bk]
 				_flow[k] -= mv; _flow[bk] += mv
 				_fTo[bk] += mv * Topt[k]; _fSa[bk] += mv * Salt[k]; _fDr[bk] += mv * Dry[k]
+				var _gk := k * GENE_K; var _gbk := int(bk) * GENE_K
+				for _ig in GENE_K: _fGeneE[_gbk + _ig] += mv * geneE[_gk + _ig]
+				var _lk := k * N_LAT; var _lbk := int(bk) * N_LAT
+				for _il in N_LAT:
+					_fLatGene[_lbk + _il] += mv * latGene[_lk + _il]
+					_fLatGate[_lbk + _il] += mv * latGate[_lk + _il]
 	for k in SZ:
 		if _flow[k] > 0.0:
 			var tot := N[k] + _flow[k]
@@ -840,6 +851,10 @@ func stepLife(dt: float) -> void:
 				Topt[k] = (Topt[k] * N[k] + _fTo[k]) / tot
 				Salt[k] = (Salt[k] * N[k] + _fSa[k]) / tot
 				Dry[k] = (Dry[k] * N[k] + _fDr[k]) / tot
+				for _jg in GENE_K: geneE[k * GENE_K + _jg] = (geneE[k * GENE_K + _jg] * N[k] + _fGeneE[k * GENE_K + _jg]) / tot
+				for _jl in N_LAT:
+					latGene[k * N_LAT + _jl] = (latGene[k * N_LAT + _jl] * N[k] + _fLatGene[k * N_LAT + _jl]) / tot
+					latGate[k * N_LAT + _jl] = (latGate[k * N_LAT + _jl] * N[k] + _fLatGate[k * N_LAT + _jl]) / tot
 		N[k] = max(0.0, N[k] + _flow[k])
 
 	# ---------- 食物网:N(生产者)→ H(食草)→ C(食肉),Holling-II ----------
