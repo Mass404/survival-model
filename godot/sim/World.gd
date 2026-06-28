@@ -89,9 +89,13 @@ const MUT_K := 0.08                 # 基因突变幅度/地质年
 const N_LAT := 8                    # 潜在维度池上限(有效维度数由门控基因演化决定)
 const LAT_EFF := 0.04               # 潜在性状对生长弱耦合(小→不挠核心 35/35)
 const LAT_ETA := 3.0                # 潜在基因梯度学习率
+const GRN_T := 3                    # GRN1 发育迭代步数(性能/动力学权衡)
+const NLAT2 := N_LAT * N_LAT        # 调控矩阵元素数/格
 const EXPR_COST := 0.015            # B3 每个表达维的代价→简约压力→有效维度数涌现
 var latGene := PackedFloat64Array() # 每格 N_LAT 潜在基因(值)
 var latGate := PackedFloat64Array() # B3 每维表达门控基因(开/关→有效维度数可变)
+var latR := PackedFloat64Array()    # GRN1 每格调控矩阵(N_LAT×N_LAT;0→退化成一次性,演化出网络动力学)
+var _latP := PackedFloat64Array()   # GRN1 迭代发育出的潜在表型缓存(SZ*N_LAT)
 
 # ---------- 预分配缓冲 / 缓存 ----------
 var _s0 := PackedFloat64Array()
@@ -104,6 +108,7 @@ var _fDr := PackedFloat64Array()
 var _fGeneE := PackedFloat64Array()   # IH 继承层:基因组随生物量迁移携带(质量加权=遗传+基因流)
 var _fLatGene := PackedFloat64Array()
 var _fLatGate := PackedFloat64Array()
+var _fLatR := PackedFloat64Array()   # GRN1b 调控矩阵随生物量迁移携带(继承)
 var _comp := PackedInt32Array()
 var _LAT := PackedFloat64Array()   # 每纬度 latof(j)
 var _UB := PackedFloat64Array()    # 每纬度 uband(latof(j))
@@ -368,7 +373,7 @@ func _init() -> void:
 		_UB[j] = uband(_LAT[j])
 		UMAX = max(UMAX, abs(_UB[j]))
 	for buf in [_s0, _sl0, _t1, _flow, _fTo, _fSa, _fDr]: buf.resize(SZ)
-	_fGeneE.resize(SZ * GENE_K); _fLatGene.resize(SZ * N_LAT); _fLatGate.resize(SZ * N_LAT)
+	_fGeneE.resize(SZ * GENE_K); _fLatGene.resize(SZ * N_LAT); _fLatGate.resize(SZ * N_LAT); _fLatR.resize(SZ * NLAT2)
 	_comp.resize(SZ)
 
 # ---------- 几何 / 物理小函数 ----------
@@ -726,6 +731,7 @@ func stepLife(dt: float) -> void:
 			var aerB := 1.0 + aerBoost * clampf(rAero[k], 0.0, 1.0) * o2f + euBoost * clampf(rEuk[k], 0.0, 1.0) * o2f
 			var szSlow := 1.0 - sizeCost * clampf(rSize[k], 0.0, 1.0) * (1.0 - 0.5 * clampf(rEuk[k], 0.0, 1.0))
 			var memb := clampf(rMemb[k], 0.0, 1.0) if Lip[k] > cmc else 0.0
+			_latDevelop(k)                                                             # GRN1 迭代发育潜在表型
 			var gB := aerB * szSlow * Hab[k] * (1.0 - 0.3 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - diffRepCost * clampf(rDiff[k], 0.0, 1.0)) * (1.0 - shellGrowCost * clampf(rShell[k], 0.0, 1.0)) * (1.0 + neuroForage * clampf(rNeuro[k], 0.0, 1.0) * clampf(Sym[k], 0.0, 1.0)) * (1.0 + symbBenefit * clampf(rSymb[k], 0.0, 1.0) * clampf(1.0 - availN / 2.0, 0.0, 1.0)) * (1.0 + membBoost * memb)   # ×多细胞/分化/壳代价 ×神经/共生/膜增益
 			gB *= _latGrow(k, j)                                                       # B2 潜在维度耦合生长
 			var wHet := rBirthK * (food / (food + rKhalf)) * fit * gB
@@ -785,7 +791,7 @@ func stepLife(dt: float) -> void:
 				rDiff[k] = clampf(rDiff[k] + diffAdaptK * dl * (muG * (0.6 + predP * 0.5) - diffCost), 0.0, 1.0)   # 分化仍直接(未纳入基因)
 				for _l in N_LAT:   # B3 潜在基因:值(门控加权)+ 门控(净益>代价才开)双演化→有效维度数涌现
 					var _gate := 1.0 / (1.0 + exp(-latGate[k * N_LAT + _l]))
-					var _lp := 1.0 / (1.0 + exp(-latGene[k * N_LAT + _l]))
+					var _lp := float(_latP[k * N_LAT + _l])
 					var _ben := LAT_EFF * (2.0 * _lp - 1.0) * _latsig(_l, j)
 					latGene[k * N_LAT + _l] += LAT_ETA * dl * _gate * LAT_EFF * _latsig(_l, j) * _lp * (1.0 - _lp)
 					latGate[k * N_LAT + _l] += LAT_ETA * dl * _gate * (1.0 - _gate) * (_ben - EXPR_COST)
@@ -822,7 +828,7 @@ func stepLife(dt: float) -> void:
 			Axis[k] = clampf(Axis[k] + morphK * (gS * sizeP - Axis[k] - morphCost), 0.0, 1.0)
 	# 四邻扩散 + 带性状迁移(守恒)
 	_flow.fill(0.0); _fTo.fill(0.0); _fSa.fill(0.0); _fDr.fill(0.0)
-	_fGeneE.fill(0.0); _fLatGene.fill(0.0); _fLatGate.fill(0.0)
+	_fGeneE.fill(0.0); _fLatGene.fill(0.0); _fLatGate.fill(0.0); _fLatR.fill(0.0)
 	var f := clampf(MOVE * dt / 10.0, 0.0, 0.24)
 	for j in NLat:
 		var jb := j * NLon
@@ -844,6 +850,8 @@ func stepLife(dt: float) -> void:
 				for _il in N_LAT:
 					_fLatGene[_lbk + _il] += mv * latGene[_lk + _il]
 					_fLatGate[_lbk + _il] += mv * latGate[_lk + _il]
+				var _rk := k * NLAT2; var _rbk := int(bk) * NLAT2
+				for _ir in NLAT2: _fLatR[_rbk + _ir] += mv * latR[_rk + _ir]
 	for k in SZ:
 		if _flow[k] > 0.0:
 			var tot := N[k] + _flow[k]
@@ -855,6 +863,7 @@ func stepLife(dt: float) -> void:
 				for _jl in N_LAT:
 					latGene[k * N_LAT + _jl] = (latGene[k * N_LAT + _jl] * N[k] + _fLatGene[k * N_LAT + _jl]) / tot
 					latGate[k * N_LAT + _jl] = (latGate[k * N_LAT + _jl] * N[k] + _fLatGate[k * N_LAT + _jl]) / tot
+				for _jr in NLAT2: latR[k * NLAT2 + _jr] = (latR[k * NLAT2 + _jr] * N[k] + _fLatR[k * NLAT2 + _jr]) / tot
 		N[k] = max(0.0, N[k] + _flow[k])
 
 	# ---------- 食物网:N(生产者)→ H(食草)→ C(食肉),Holling-II ----------
@@ -1196,16 +1205,32 @@ func geneMutate() -> void:   # B层:逐地质年给有生命格的基因加种�
 			geneE[gb + g] += MUT_K * _gnoise(k, g, geoT)
 		for l in N_LAT: latGene[k * N_LAT + l] += MUT_K * _gnoise(k, 100 + l, geoT)   # B2 潜在基因值突变
 		for l in N_LAT: latGate[k * N_LAT + l] += MUT_K * _gnoise(k, 200 + l, geoT)   # B3 门控基因突变
+		for m in NLAT2: latR[k * NLAT2 + m] += MUT_K * 0.5 * _gnoise(k, 300 + m, geoT)   # GRN1b 调控矩阵突变
 
 func _latsig(l: int, j: int) -> float:   # 每潜在维度绑不同纬度带环境信号(确定性)→含义从环境涌现
 	return sin(float(l) * 1.7 + 2.2) * cos(_LAT[j] * PI / 180.0 * (1.0 + float(l) * 0.6))
+
+func _latDevelop(k: int) -> void:   # GRN1:潜在表型=调控矩阵 latR 迭代发育到稳态(latR=0→退化成 sigmoid(latGene))
+	if N[k] <= 1e-3: return   # 死格 latent 不参与,省算
+	var lb := k * N_LAT
+	var rb := k * NLAT2
+	var a := []
+	for l in N_LAT: a.append(1.0 / (1.0 + exp(-latGene[lb + l])))
+	for _it in GRN_T:
+		var na := []
+		for l in N_LAT:
+			var sgrn: float = latGene[lb + l]
+			for m in N_LAT: sgrn += latR[rb + l * N_LAT + m] * float(a[m])
+			na.append(1.0 / (1.0 + exp(-sgrn)))
+		a = na
+	for l in N_LAT: _latP[lb + l] = float(a[l])
 
 func _latGrow(k: int, j: int) -> float:   # 潜在性状弱耦合生长:表达匹配环境→增益、否则代价(功能涌现的选择压)
 	var f := 1.0
 	var lb := k * N_LAT
 	for l in N_LAT:
 		var gate := 1.0 / (1.0 + exp(-latGate[lb + l]))
-		var lp := 1.0 / (1.0 + exp(-latGene[lb + l]))
+		var lp := float(_latP[lb + l])
 		f += gate * (LAT_EFF * (2.0 * lp - 1.0) * _latsig(l, j) - EXPR_COST)   # B3 仅门控开的维接生长且付代价
 	return clampf(f, 0.5, 1.5)
 
@@ -1277,6 +1302,8 @@ func spinUp() -> void:
 	geneE = PackedFloat64Array(); geneE.resize(SZ * GENE_K)   # 基因初值0→develop出性状≈0
 	latGene = PackedFloat64Array(); latGene.resize(SZ * N_LAT)   # B2 潜在基因值(中性起点)
 	latGate = PackedFloat64Array(); latGate.resize(SZ * N_LAT)   # B3 门控(0→半开,演化定开几维)
+	latR = PackedFloat64Array(); latR.resize(SZ * NLAT2)   # GRN1 调控矩阵(0 起点→退化成 B2/B3)
+	_latP = PackedFloat64Array(); _latP.resize(SZ * N_LAT)
 	_devW = []
 	for _m in GENE_K:
 		var _row := []
