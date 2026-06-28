@@ -88,6 +88,7 @@ const MUT_K := 0.08                 # 基因突变幅度/地质年
 # B2 真·可变维度开放式:潜在表型维度(程序不预设含义),功能从"环境×选择"涌现=涌现生态位分化
 const N_LAT := 8                    # 潜在维度池上限(有效维度数由门控基因演化决定)
 const LAT_EFF := 0.04               # 潜在性状对生长弱耦合(小→不挠核心 35/35)
+const LAB := 1.5  # E5fix2 strong division-of-labor gain (signal-to-noise test)
 const LAT_ETA := 3.0                # 潜在基因梯度学习率
 const GRN_T := 3                    # GRN1 发育迭代步数(性能/动力学权衡)
 const NLAT2 := N_LAT * N_LAT        # 调控矩阵元素数/格
@@ -734,6 +735,7 @@ func stepLife(dt: float) -> void:
 			_latDevelop(k)                                                             # GRN1 迭代发育潜在表型
 			var gB := aerB * szSlow * Hab[k] * (1.0 - 0.3 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - diffRepCost * clampf(rDiff[k], 0.0, 1.0)) * (1.0 - shellGrowCost * clampf(rShell[k], 0.0, 1.0)) * (1.0 + neuroForage * clampf(rNeuro[k], 0.0, 1.0) * clampf(Sym[k], 0.0, 1.0)) * (1.0 + symbBenefit * clampf(rSymb[k], 0.0, 1.0) * clampf(1.0 - availN / 2.0, 0.0, 1.0)) * (1.0 + membBoost * memb)   # ×多细胞/分化/壳代价 ×神经/共生/膜增益
 			gB *= _latGrow(k, j)                                                       # B2 潜在维度耦合生长
+			gB *= 1.0 + LAB * clampf(rMulti[k], 0.0, 1.0) * _divPotential(k)  # E5fix2: strong continuous gain on GRN division potential
 			var wHet := rBirthK * (food / (food + rKhalf)) * fit * gB
 			var wChemo := rBirthAutoK * clampf(globalRed / 4.0, 0.0, 1.0) * co2a * fit * gB
 			var wPhoto := rBirthPhotoK * clampf(Hab[k] * 1.6, 0.0, 1.0) * co2a * fit * gB
@@ -1224,6 +1226,24 @@ func _latDevelop(k: int) -> void:   # GRN1:潜在表型=调控矩阵 latR 迭代
 			na.append(1.0 / (1.0 + exp(-sgrn)))
 		a = na
 	for l in N_LAT: _latP[lb + l] = float(a[l])
+
+func _divPotential(k: int) -> float:
+	# E5fix2: division potential = |anti-init steady state - normal steady state(_latP)|; continuous from 0
+	if rMulti[k] < 0.25: return 0.0
+	var lb := k * N_LAT
+	var rb := k * NLAT2
+	var a := []
+	for l in N_LAT: a.append(1.0 - 1.0 / (1.0 + exp(-latGene[lb + l])))
+	for _it in GRN_T:
+		var na := []
+		for l in N_LAT:
+			var s: float = latGene[lb + l]
+			for m in N_LAT: s += latR[rb + l * N_LAT + m] * float(a[m])
+			na.append(1.0 / (1.0 + exp(-s)))
+		a = na
+	var d := 0.0
+	for l in N_LAT: d += absf(float(a[l]) - _latP[lb + l])
+	return d
 
 func _latGrow(k: int, j: int) -> float:   # 潜在性状弱耦合生长:表达匹配环境→增益、否则代价(功能涌现的选择压)
 	var f := 1.0
