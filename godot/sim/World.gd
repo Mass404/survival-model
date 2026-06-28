@@ -89,6 +89,7 @@ const MUT_K := 0.08                 # 基因突变幅度/地质年
 const N_LAT := 8                    # 潜在维度池上限(有效维度数由门控基因演化决定)
 const LAT_EFF := 0.04               # 潜在性状对生长弱耦合(小→不挠核心 35/35)
 const LAB := 1.5  # E5fix2 strong division-of-labor gain (signal-to-noise test)
+const DIVLAB := 8.0  # E5fix3 division reward into rMulti gene gradient
 const LAT_ETA := 3.0                # 潜在基因梯度学习率
 const GRN_T := 3                    # GRN1 发育迭代步数(性能/动力学权衡)
 const NLAT2 := N_LAT * N_LAT        # 调控矩阵元素数/格
@@ -786,6 +787,7 @@ func stepLife(dt: float) -> void:
 					neuroAdaptK * (muG * clampf((Sym[k] + predP) / 1.5, 0.0, 1.0) - neuroSelCost),
 					endoAdaptK * (muG * coldStress - endoSelCost),
 				]
+				_d[2] += DIVLAB * _divPotential(k)  # E5fix3: division potential -> rMulti gene gradient
 				for _g in GENE_K:
 					var _dg := 0.0
 					for _m in GENE_K: _dg += float(_d[_m]) * float(_P[_m]) * (1.0 - float(_P[_m])) * float(_devW[_m][_g])
@@ -1229,7 +1231,7 @@ func _latDevelop(k: int) -> void:   # GRN1:潜在表型=调控矩阵 latR 迭代
 
 func _divPotential(k: int) -> float:
 	# E5fix2: division potential = |anti-init steady state - normal steady state(_latP)|; continuous from 0
-	if rMulti[k] < 0.25: return 0.0
+	if rMulti[k] < 0.05: return 0.0
 	var lb := k * N_LAT
 	var rb := k * NLAT2
 	var a := []
