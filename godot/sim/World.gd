@@ -90,6 +90,7 @@ const N_LAT := 8                    # 潜在维度池上限(有效维度数由�
 const LAT_EFF := 0.04               # 潜在性状对生长弱耦合(小→不挠核心 35/35)
 const LAB := 1.5  # E5fix2 strong division-of-labor gain (signal-to-noise test)
 const DIVLAB := 8.0  # E5fix3 division reward into rMulti gene gradient
+const MG_K := 4
 const SENS_EVADE := 0.4
 const DFORM := 0.4
 const LATR_PROTECT := 0.9  # E5fix5 protect high-d latR from migration averaging
@@ -1243,6 +1244,27 @@ func _latDevelop(k: int) -> void:   # GRN1:潜在表型=调控矩阵 latR 迭代
 			na.append(1.0 / (1.0 + exp(-sgrn)))
 		a = na
 	for l in N_LAT: _latP[lb + l] = float(a[l])
+
+func _mbranch(x: float, y: float, ang: float, ln: float, d: int, angle: float, asym: float, lr: float) -> void:
+	if d <= 0 or ln < 0.01: return
+	var r := ang * PI / 180.0
+	var nx := x + ln * cos(r)
+	var ny := y + ln * sin(r)
+	if ny < float(_mbb[0]): _mbb[0] = ny
+	if nx < float(_mbb[1]): _mbb[1] = nx
+	if nx > float(_mbb[2]): _mbb[2] = nx
+	_mbranch(nx, ny, ang - angle - asym, ln * lr, d - 1, angle, asym, lr)
+	_mbranch(nx, ny, ang + angle - asym, ln * lr, d - 1, angle, asym, lr)
+func _growMorph(k: int) -> void:
+	var b := k * MG_K
+	var angle: float = clampf(mGene[b], 0.0, 1.0) * 80.0
+	var asym: float = (clampf(mGene[b+1], 0.0, 1.0) - 0.5) * 40.0
+	var lr: float = 0.5 + clampf(mGene[b+2], 0.0, 1.0) * 0.4
+	var maxd: int = int(2.0 + clampf(mGene[b+3], 0.0, 1.0) * 3.0)
+	_mbb[0] = 0.0; _mbb[1] = 0.0; _mbb[2] = 0.0
+	_mbranch(0.0, 0.0, -90.0, 1.0, maxd, angle, asym, lr)
+	_mH[k] = -float(_mbb[0])
+	_mS[k] = float(_mbb[2]) - float(_mbb[1])
 
 func _divPotential(k: int) -> float:
 	# E5fix2: division potential = |anti-init steady state - normal steady state(_latP)|; continuous from 0
