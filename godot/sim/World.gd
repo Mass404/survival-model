@@ -90,6 +90,7 @@ const N_LAT := 8                    # 潜在维度池上限(有效维度数由�
 const LAT_EFF := 0.04               # 潜在性状对生长弱耦合(小→不挠核心 35/35)
 const LAB := 1.5  # E5fix2 strong division-of-labor gain (signal-to-noise test)
 const DIVLAB := 8.0  # E5fix3 division reward into rMulti gene gradient
+const LATR_PROTECT := 0.9  # E5fix5 protect high-d latR from migration averaging
 const LAT_ETA := 3.0                # 潜在基因梯度学习率
 const GRN_T := 3                    # GRN1 发育迭代步数(性能/动力学权衡)
 const NLAT2 := N_LAT * N_LAT        # 调控矩阵元素数/格
@@ -864,10 +865,11 @@ func stepLife(dt: float) -> void:
 				Salt[k] = (Salt[k] * N[k] + _fSa[k]) / tot
 				Dry[k] = (Dry[k] * N[k] + _fDr[k]) / tot
 				for _jg in GENE_K: geneE[k * GENE_K + _jg] = (geneE[k * GENE_K + _jg] * N[k] + _fGeneE[k * GENE_K + _jg]) / tot
+				var _protR: float = (1.0 - LATR_PROTECT * clampf(_divPotential(k), 0.0, 1.0)) if rMulti[k] >= 0.05 else 1.0  # E5fix5
 				for _jl in N_LAT:
 					latGene[k * N_LAT + _jl] = (latGene[k * N_LAT + _jl] * N[k] + _fLatGene[k * N_LAT + _jl]) / tot
 					latGate[k * N_LAT + _jl] = (latGate[k * N_LAT + _jl] * N[k] + _fLatGate[k * N_LAT + _jl]) / tot
-				for _jr in NLAT2: latR[k * NLAT2 + _jr] = (latR[k * NLAT2 + _jr] * N[k] + _fLatR[k * NLAT2 + _jr]) / tot
+				for _jr in NLAT2: latR[k * NLAT2 + _jr] = (latR[k * NLAT2 + _jr] * N[k] + _fLatR[k * NLAT2 + _jr] * _protR) / (N[k] + _flow[k] * _protR)
 		N[k] = max(0.0, N[k] + _flow[k])
 
 	# ---------- 食物网:N(生产者)→ H(食草)→ C(食肉),Holling-II ----------
