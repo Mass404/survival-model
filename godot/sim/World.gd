@@ -738,6 +738,7 @@ func stepLife(dt: float) -> void:
 			var gB := aerB * szSlow * Hab[k] * (1.0 - 0.3 * clampf(rMulti[k], 0.0, 1.0)) * (1.0 - diffRepCost * clampf(rDiff[k], 0.0, 1.0)) * (1.0 - shellGrowCost * clampf(rShell[k], 0.0, 1.0)) * (1.0 + neuroForage * clampf(rNeuro[k], 0.0, 1.0) * clampf(Sym[k], 0.0, 1.0)) * (1.0 + symbBenefit * clampf(rSymb[k], 0.0, 1.0) * clampf(1.0 - availN / 2.0, 0.0, 1.0)) * (1.0 + membBoost * memb)   # ×多细胞/分化/壳代价 ×神经/共生/膜增益
 			gB *= _latGrow(k, j)                                                       # B2 潜在维度耦合生长
 			gB *= 1.0 + LAB * clampf(rMulti[k], 0.0, 1.0) * _divPotential(k)  # E5fix2: strong continuous gain on GRN division potential
+			gB *= 1.0 + MORPH_LIGHT * clampf(_mH[k] / 4.0, 0.0, 1.0)  # E9-3 L-system 形态受光增益: 高->受光->生长(选择塑形)
 			var wHet := rBirthK * (food / (food + rKhalf)) * fit * gB
 			var wChemo := rBirthAutoK * clampf(globalRed / 4.0, 0.0, 1.0) * co2a * fit * gB
 			var wPhoto := rBirthPhotoK * clampf(Hab[k] * 1.6, 0.0, 1.0) * co2a * fit * gB
