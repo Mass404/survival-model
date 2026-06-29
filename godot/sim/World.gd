@@ -90,6 +90,7 @@ const N_LAT := 8                    # 潜在维度池上限(有效维度数由�
 const LAT_EFF := 0.04               # 潜在性状对生长弱耦合(小→不挠核心 35/35)
 const LAB := 1.5  # E5fix2 strong division-of-labor gain (signal-to-noise test)
 const DIVLAB := 8.0  # E5fix3 division reward into rMulti gene gradient
+const SENS_EVADE := 0.4
 const LATR_PROTECT := 0.9  # E5fix5 protect high-d latR from migration averaging
 const LAT_ETA := 3.0                # 潜在基因梯度学习率
 const GRN_T := 3                    # GRN1 发育迭代步数(性能/动力学权衡)
@@ -889,7 +890,9 @@ func stepLife(dt: float) -> void:
 		if C[k] > 0.0:
 			# E3 social: herd defense - dense herbivore lowers per-capita predation (safety in numbers)
 			var herdDef: float = 1.0 - FW_HERD * clampf(hv / (hv + FW_HERD_HALF), 0.0, 1.0)
-			var graze2: float = min(FW_GRAZE * C[k] * (hv / (hv + FW_HALF_C)) * ds * herdDef, hv * 0.5)
+			var senseOrg: float = clampf(rNeuro[k], 0.0, 1.0) * clampf(_divP[k] / 0.5, 0.0, 1.0)
+			var senseEvade: float = 1.0 - SENS_EVADE * senseOrg
+			var graze2: float = min(FW_GRAZE * C[k] * (hv / (hv + FW_HALF_C)) * ds * herdDef * senseEvade, hv * 0.5)
 			H[k] = hv - graze2
 			C[k] = max(0.0, C[k] + FW_YIELD * graze2 - FW_MC * C[k] * ds)
 	# E3 觅食: 定向流动—食草趋生产者(N)、食肉趋食草(H)的高密度邻格(守恒,叠加在被动扩散上)
