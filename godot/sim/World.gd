@@ -855,6 +855,7 @@ func stepLife(dt: float) -> void:
 				_fTo[bk] += mv * Topt[k]; _fSa[bk] += mv * Salt[k]; _fDr[bk] += mv * Dry[k]
 				var _gk := k * GENE_K; var _gbk := int(bk) * GENE_K
 				for _ig in GENE_K: _fGeneE[_gbk + _ig] += mv * geneE[_gk + _ig]
+				for _im in MG_K: _fMGene[int(bk) * MG_K + _im] += mv * mGene[k * MG_K + _im]
 				var _lk := k * N_LAT; var _lbk := int(bk) * N_LAT
 				for _il in N_LAT:
 					_fLatGene[_lbk + _il] += mv * latGene[_lk + _il]
@@ -869,6 +870,7 @@ func stepLife(dt: float) -> void:
 				Salt[k] = (Salt[k] * N[k] + _fSa[k]) / tot
 				Dry[k] = (Dry[k] * N[k] + _fDr[k]) / tot
 				for _jg in GENE_K: geneE[k * GENE_K + _jg] = (geneE[k * GENE_K + _jg] * N[k] + _fGeneE[k * GENE_K + _jg]) / tot
+				for _jm in MG_K: mGene[k * MG_K + _jm] = (mGene[k * MG_K + _jm] * N[k] + _fMGene[k * MG_K + _jm]) / tot
 				var _protR: float = (1.0 - LATR_PROTECT * clampf(_divPotential(k), 0.0, 1.0)) if rMulti[k] >= 0.05 else 1.0  # E5fix5
 				for _jl in N_LAT:
 					latGene[k * N_LAT + _jl] = (latGene[k * N_LAT + _jl] * N[k] + _fLatGene[k * N_LAT + _jl]) / tot
@@ -1215,6 +1217,7 @@ func geneMutate() -> void:   # B层:逐地质年给有生命格的基因加种�
 		var gb := k * GENE_K
 		for g in GENE_K:
 			geneE[gb + g] += MUT_K * _gnoise(k, g, geoT)
+			for _gm in MG_K: mGene[k * MG_K + _gm] += MUT_K * _gnoise(k, 400 + _gm, geoT)
 		for l in N_LAT: latGene[k * N_LAT + l] += MUT_K * _gnoise(k, 100 + l, geoT)   # B2 潜在基因值突变
 		for l in N_LAT: latGate[k * N_LAT + l] += MUT_K * _gnoise(k, 200 + l, geoT)   # B3 门控基因突变
 		if rMulti[k] >= 0.05:  # E5fix4: multicell latR hill-climb mutation (keep only mutations that raise division potential d)
